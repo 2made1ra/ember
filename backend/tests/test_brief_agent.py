@@ -243,6 +243,49 @@ class BriefAgentTests(unittest.TestCase):
         self.assertNotIn("Предварительная смета", response["message"])
         self.assertNotIn("= 50 000 ₽", response["message"])
 
+    def test_selected_candidate_survives_later_catalog_search_for_budget(self):
+        selected_item = self._catalog_item(
+            "c1",
+            "Кофе-брейк базовый",
+            "Комбинат питания",
+            "catering",
+            unit_price=500,
+            quantity_kind="per_guest",
+        )
+        replacement_item = self._catalog_item(
+            "c2",
+            "Кофе-брейк расширенный",
+            "Fresh Food",
+            "catering",
+            unit_price=800,
+            quantity_kind="per_guest",
+        )
+        state = BriefState(
+            event_type="конференция",
+            city="Москва",
+            guests_count=100,
+            format="офлайн",
+            budget_tier="стандарт",
+        )
+        state.service_needs["catering"].status = "needed"
+        state.service_needs["catering"].selected_item_ids = ["c1"]
+        state.service_needs["catering"].candidate_items = [selected_item]
+        searcher = RecordingSearcher({"catering": [replacement_item]})
+
+        response = run_brief_turn(
+            state=state,
+            message="Нужен еще один поиск по кофе-брейку для конференции.",
+            searcher=searcher,
+            chat_client=None,
+        )
+
+        self.assertEqual(response["found_items"][0]["payload"]["id"], "c2")
+        self.assertEqual(
+            [line["item_id"] for line in response["budget"]["lines"]],
+            ["c1"],
+        )
+        self.assertEqual(response["budget"]["total"], 50000.0)
+
     def test_budget_uses_variable_and_fixed_quantity_rules(self):
         result = estimate_budget(
             [

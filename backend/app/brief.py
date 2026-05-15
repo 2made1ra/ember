@@ -357,6 +357,29 @@ def build_service_query(service_type: str, state: BriefState, message: str) -> s
     return context.strip()
 
 
+def _candidate_item_id(item: dict[str, Any]) -> str:
+    payload = item.get("payload", item)
+    return str(payload.get("id", item.get("id")) or "")
+
+
+def _merge_selected_candidate_items(
+    new_items: list[dict[str, Any]],
+    need: ServiceNeed,
+) -> list[dict[str, Any]]:
+    selected_ids = {str(item_id) for item_id in need.selected_item_ids}
+    if not selected_ids:
+        return new_items
+
+    merged_items = list(new_items)
+    merged_item_ids = {_candidate_item_id(item) for item in merged_items}
+    for item in need.candidate_items:
+        item_id = _candidate_item_id(item)
+        if item_id in selected_ids and item_id not in merged_item_ids:
+            merged_items.append(item)
+            merged_item_ids.add(item_id)
+    return merged_items
+
+
 def search_catalog_for_services(
     state: BriefState,
     message: str,
@@ -372,7 +395,7 @@ def search_catalog_for_services(
         items = searcher.search(query, limit=5, filters=filters)
         need = state.service_needs[service_type]
         need.search_queries = [query]
-        need.candidate_items = items
+        need.candidate_items = _merge_selected_candidate_items(items, need)
         found_items.extend(items)
     return found_items
 
