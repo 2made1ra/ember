@@ -24,6 +24,7 @@ def _supplier_id(payload: dict[str, Any]) -> str:
 class PostgresCatalogStore:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
+        self._schema_ready = False
 
     def _connect(self):
         try:
@@ -38,6 +39,8 @@ class PostgresCatalogStore:
         )
 
     def ensure_schema(self) -> None:
+        if self._schema_ready:
+            return
         with self._connect() as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             conn.execute(
@@ -82,6 +85,7 @@ class PostgresCatalogStore:
                 )
                 """
             )
+        self._schema_ready = True
 
     def replace_catalog(self, items: list[CatalogItem]) -> None:
         self.ensure_schema()
@@ -90,82 +94,35 @@ class PostgresCatalogStore:
                 with conn.transaction():
                     conn.execute("DELETE FROM catalog_price_items")
                     conn.execute("DELETE FROM catalog_suppliers")
+                    if not items:
+                        conn.execute("DROP INDEX IF EXISTS catalog_embeddings_embedding_hnsw_idx")
+                        return
+
+                    dimension = len(items[0].vector)
+                    conn.execute("DROP INDEX IF EXISTS catalog_embeddings_embedding_hnsw_idx")
+                    conn.execute(
+                        "ALTER TABLE catalog_embeddings "
+                        f"ALTER COLUMN embedding TYPE vector({dimension}) "
+                        f"USING embedding::vector({dimension})"
+                    )
+
+                    supplier_params: dict[str, tuple[Any, ...]] = {}
+                    item_params: list[tuple[Any, ...]] = []
+                    embedding_params: list[tuple[Any, ...]] = []
                     for item in items:
                         payload = item.payload
                         supplier_id = _supplier_id(payload)
-                        conn.execute(
-                            """
-                            INSERT INTO catalog_suppliers (
-                                id, name, inn, city, city_normalized, phone, email, status, status_normalized
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (id) DO UPDATE SET
-                                name = EXCLUDED.name,
-                                inn = EXCLUDED.inn,
-                                city = EXCLUDED.city,
-                                city_normalized = EXCLUDED.city_normalized,
-                                phone = EXCLUDED.phone,
-                                email = EXCLUDED.email,
-                                status = EXCLUDED.status,
-                                status_normalized = EXCLUDED.status_normalized
-                            """,
-                            (
-                                supplier_id,
-                                str(payload.get("supplier") or "Unknown"),
-                                str(payload.get("supplier_inn") or "") or None,
-                                str(payload.get("supplier_city") or "") or None,
-                                str(payload.get("city_normalized") or "") or None,
-                                str(payload.get("supplier_phone") or "") or None,
-                                str(payload.get("supplier_email") or "") or None,
-                                str(payload.get("supplier_status") or "") or None,
-                                str(payload.get("supplier_status_normalized") or "") or None,
-                            ),
-                        )
-                        conn.execute(
-                            """
-                            INSERT INTO catalog_price_items (
-                                id, supplier_id, name, category, unit, unit_price, source_text,
-                                created_at, section, has_vat, service_type, unit_kind, quantity_kind
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (id) DO UPDATE SET
-                                supplier_id = EXCLUDED.supplier_id,
-                                name = EXCLUDED.name,
-                                category = EXCLUDED.category,
-                                unit = EXCLUDED.unit,
-                                unit_price = EXCLUDED.unit_price,
-                                source_text = EXCLUDED.source_text,
-                                created_at = EXCLUDED.created_at,
-                                section = EXCLUDED.section,
-                                has_vat = EXCLUDED.has_vat,
-                                service_type = EXCLUDED.service_type,
-                                unit_kind = EXCLUDED.unit_kind,
-                                quantity_kind = EXCLUDED.quantity_kind
-                            """,
-                            (
-                                item.id,
-                                supplier_id,
-                                str(payload.get("name") or ""),
-                                str(payload.get("category") or "") or None,
-                                str(payload.get("unit") or "") or None,
-                                float(payload.get("unit_price") or item.unit_price or 0),
-                                str(payload.get("source_text") or "") or None,
-                                str(payload.get("created_at") or "") or None,
-                                str(payload.get("section") or "") or None,
-                                str(payload.get("has_vat") or "") or None,
-                                str(payload.get("service_type") or "") or None,
-                                str(payload.get("unit_kind") or "") or None,
-                                str(payload.get("quantity_kind") or "") or None,
-                            ),
-                        )
-                        conn.execute(
-                            """
-                            INSERT INTO catalog_embeddings (item_id, embedding)
-                            VALUES (%s, %s::vector)
-                            ON CONFLICT (item_id) DO UPDATE SET embedding = EXCLUDED.embedding
-                            """,
-                            (item.id, _vector_literal(item.vector)),
-                        )
+                        supplier_params[supplier_id] = _supplier_params(supplier_id, payload)
+                        item_params.append(_item_params(item, supplier_id))
+                        embedding_params.append((item.id, _vector_literal(item.vector)))
+
+                    _executemany(conn, _SUPPLIER_UPSERT_SQL, list(supplier_params.values()))
+                    _executemany(conn, _PRICE_ITEM_UPSERT_SQL, item_params)
+                    _executemany(conn, _EMBEDDING_UPSERT_SQL, embedding_params)
+                    conn.execute(
+                        "CREATE INDEX catalog_embeddings_embedding_hnsw_idx "
+                        "ON catalog_embeddings USING hnsw (embedding vector_cosine_ops)"
+                    )
         except Exception as exc:
             raise DependencyUnavailableError(
                 "PostgreSQL недоступен: не удалось заменить каталог в pgvector."
@@ -258,3 +215,88 @@ def _row_payload(row: dict[str, Any]) -> dict[str, Any]:
         "unit_kind": row.get("unit_kind"),
         "quantity_kind": row.get("quantity_kind"),
     }
+
+
+_SUPPLIER_UPSERT_SQL = """
+INSERT INTO catalog_suppliers (
+    id, name, inn, city, city_normalized, phone, email, status, status_normalized
+)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    inn = EXCLUDED.inn,
+    city = EXCLUDED.city,
+    city_normalized = EXCLUDED.city_normalized,
+    phone = EXCLUDED.phone,
+    email = EXCLUDED.email,
+    status = EXCLUDED.status,
+    status_normalized = EXCLUDED.status_normalized
+"""
+
+_PRICE_ITEM_UPSERT_SQL = """
+INSERT INTO catalog_price_items (
+    id, supplier_id, name, category, unit, unit_price, source_text,
+    created_at, section, has_vat, service_type, unit_kind, quantity_kind
+)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (id) DO UPDATE SET
+    supplier_id = EXCLUDED.supplier_id,
+    name = EXCLUDED.name,
+    category = EXCLUDED.category,
+    unit = EXCLUDED.unit,
+    unit_price = EXCLUDED.unit_price,
+    source_text = EXCLUDED.source_text,
+    created_at = EXCLUDED.created_at,
+    section = EXCLUDED.section,
+    has_vat = EXCLUDED.has_vat,
+    service_type = EXCLUDED.service_type,
+    unit_kind = EXCLUDED.unit_kind,
+    quantity_kind = EXCLUDED.quantity_kind
+"""
+
+_EMBEDDING_UPSERT_SQL = """
+INSERT INTO catalog_embeddings (item_id, embedding)
+VALUES (%s, %s::vector)
+ON CONFLICT (item_id) DO UPDATE SET embedding = EXCLUDED.embedding
+"""
+
+
+def _supplier_params(supplier_id: str, payload: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        supplier_id,
+        str(payload.get("supplier") or "Unknown"),
+        str(payload.get("supplier_inn") or "") or None,
+        str(payload.get("supplier_city") or "") or None,
+        str(payload.get("city_normalized") or "") or None,
+        str(payload.get("supplier_phone") or "") or None,
+        str(payload.get("supplier_email") or "") or None,
+        str(payload.get("supplier_status") or "") or None,
+        str(payload.get("supplier_status_normalized") or "") or None,
+    )
+
+
+def _item_params(item: CatalogItem, supplier_id: str) -> tuple[Any, ...]:
+    payload = item.payload
+    return (
+        item.id,
+        supplier_id,
+        str(payload.get("name") or ""),
+        str(payload.get("category") or "") or None,
+        str(payload.get("unit") or "") or None,
+        float(payload.get("unit_price") or item.unit_price or 0),
+        str(payload.get("source_text") or "") or None,
+        str(payload.get("created_at") or "") or None,
+        str(payload.get("section") or "") or None,
+        str(payload.get("has_vat") or "") or None,
+        str(payload.get("service_type") or "") or None,
+        str(payload.get("unit_kind") or "") or None,
+        str(payload.get("quantity_kind") or "") or None,
+    )
+
+
+def _executemany(conn: Any, sql: str, params_seq: list[tuple[Any, ...]]) -> None:
+    if hasattr(conn, "executemany"):
+        conn.executemany(sql, params_seq)
+        return
+    with conn.cursor() as cur:
+        cur.executemany(sql, params_seq)
