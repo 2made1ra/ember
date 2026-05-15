@@ -1,0 +1,12 @@
+{
+  "name": "argus-brief-agent-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test:frontend": "npm --prefix frontend test",
+    "build:frontend": "npm --prefix frontend run build"
+  },
+  "devDependencies": {
+    "supabase": "^2.98.2"
+  }
+}

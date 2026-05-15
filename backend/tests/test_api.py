@@ -1,0 +1,367 @@
+import unittest
+from unittest.mock import Mock, patch
+
+import httpx
+from fastapi.testclient import TestClient
+
+from app.auth import require_user
+from app.errors import DependencyUnavailableError
+from app.main import app
+from app.state import reset_app_state, set_catalog_status
+
+
+class ApiTests(unittest.TestCase):
+    def setUp(self):
+        reset_app_state()
+        app.dependency_overrides[require_user] = lambda: {
+            "id": "user-1",
+            "email": "demo@example.com",
+            "app_metadata": {"role": "admin"},
+        }
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        app.dependency_overrides.clear()
+
+    def test_health_remains_public_without_auth(self):
+        app.dependency_overrides.clear()
+
+        response = self.client.get("/api/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_catalog_status_requires_auth_token(self):
+        app.dependency_overrides.clear()
+
+        response = self.client.get("/api/catalog/status")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("authorization", response.json()["detail"].lower())
+
+    def test_catalog_status_accepts_supabase_bearer_token(self):
+        app.dependency_overrides.clear()
+        supabase_response = Mock()
+        supabase_response.raise_for_status.return_value = None
+        supabase_response.json.return_value = {
+            "id": "user-1",
+            "email": "demo@example.com",
+        }
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SUPABASE_URL": "https://project-ref.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "publishable-key",
+            },
+            clear=True,
+        ), patch("app.auth.httpx.get", return_value=supabase_response) as get:
+            response = self.client.get(
+                "/api/catalog/status",
+                headers={"Authorization": "Bearer valid-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(str(get.call_args.args[0]), "https://project-ref.supabase.co/auth/v1/user")
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer valid-token")
+        self.assertEqual(get.call_args.kwargs["headers"]["apikey"], "publishable-key")
+        self.assertIs(get.call_args.kwargs["trust_env"], False)
+
+    def test_catalog_status_rejects_invalid_supabase_token(self):
+        app.dependency_overrides.clear()
+        request = httpx.Request("GET", "https://project-ref.supabase.co/auth/v1/user")
+        response = httpx.Response(status_code=401, request=request)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SUPABASE_URL": "https://project-ref.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "publishable-key",
+            },
+            clear=True,
+        ), patch(
+            "app.auth.httpx.get",
+            side_effect=httpx.HTTPStatusError("Unauthorized", request=request, response=response),
+        ):
+            result = self.client.get(
+                "/api/catalog/status",
+                headers={"Authorization": "Bearer invalid-token"},
+            )
+
+        self.assertEqual(result.status_code, 401)
+        self.assertIn("invalid", result.json()["detail"].lower())
+
+    def test_catalog_status_starts_without_loaded_catalog(self):
+        response = self.client.get("/api/catalog/status")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["ready"])
+        self.assertEqual(body["stage"], "idle")
+        self.assertEqual(body["row_count"], 0)
+
+    def test_chat_requires_loaded_catalog(self):
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "Нужен бриф на конференцию", "mode": "brief"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("catalog", response.json()["detail"].lower())
+
+    def test_search_requires_loaded_catalog(self):
+        response = self.client.post(
+            "/api/search",
+            json={"query": "ужин на 30 человек"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("catalog", response.json()["detail"].lower())
+
+    def test_search_returns_semantic_results(self):
+        class FakeSearcher:
+            last_limit = None
+
+            def __init__(self, settings):
+                pass
+
+            def search(self, query, limit=8):
+                FakeSearcher.last_limit = limit
+                return [
+                    {
+                        "score": 0.88,
+                        "payload": {
+                            "id": "77",
+                            "name": "Организация ужина",
+                            "unit": "чел",
+                            "unit_price": 1200,
+                            "supplier": "Тестовый поставщик",
+                        },
+                    }
+                ][:limit]
+
+        set_catalog_status(ready=True, stage="ready", row_count=1565)
+
+        with patch("app.main.PriceSearcher", FakeSearcher):
+            response = self.client.post(
+                "/api/search",
+                json={"query": "ужин на 30 человек", "limit": 5},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["query"], "ужин на 30 человек")
+        self.assertEqual(body["items"][0]["payload"]["id"], "77")
+        self.assertTrue(body["message"].startswith("1. "))
+        self.assertIn("Организация ужина", body["message"])
+        self.assertIn("1 200 ₽ за чел", body["message"])
+        self.assertIn("Тестовый поставщик", body["message"])
+        self.assertNotIn("score", body["message"].lower())
+        self.assertNotIn("0.88", body["message"])
+        self.assertEqual(FakeSearcher.last_limit, 5)
+
+    def test_search_defaults_to_top_3(self):
+        class FakeSearcher:
+            last_limit = None
+
+            def __init__(self, settings):
+                pass
+
+            def search(self, query, limit=8):
+                FakeSearcher.last_limit = limit
+                return []
+
+        set_catalog_status(ready=True, stage="ready", row_count=1565)
+
+        with patch("app.main.PriceSearcher", FakeSearcher):
+            response = self.client.post(
+                "/api/search",
+                json={"query": "кофе брейк"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(FakeSearcher.last_limit, 3)
+
+    def test_chat_returns_json_when_dependency_is_unavailable(self):
+        class FailingSearcher:
+            def __init__(self, settings):
+                pass
+
+            def search(self, query, limit=8, filters=None):
+                raise DependencyUnavailableError("Qdrant недоступен")
+
+        set_catalog_status(ready=True, stage="ready")
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with patch("app.main.PriceSearcher", FailingSearcher):
+            response = client.post(
+                "/api/chat",
+                json={
+                    "message": (
+                        "Нужна офлайн конференция в Москве на 30 человек, "
+                        "нужен ужин, бюджет стандарт"
+                    ),
+                    "mode": "brief",
+                },
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "Qdrant недоступен")
+
+    def test_chat_endpoint_routes_search_requests_on_backend(self):
+        class FakeSearcher:
+            calls = []
+
+            def __init__(self, settings):
+                pass
+
+            def search(self, query, limit=8, filters=None):
+                FakeSearcher.calls.append({"query": query, "limit": limit, "filters": filters})
+                return [
+                    {
+                        "score": 0.88,
+                        "payload": {
+                            "id": "664",
+                            "name": "Радиомикрофон",
+                            "unit": "шт",
+                            "unit_price": 1230,
+                            "supplier": "Премьер-Шоу",
+                            "supplier_city": "Екатеринбург",
+                        },
+                    }
+                ]
+
+        class FakeChatClient:
+            calls = []
+
+            def __init__(self, settings):
+                pass
+
+            def complete(self, system, user):
+                FakeChatClient.calls.append({"system": system, "user": user})
+                if "ARGUS Router" in system:
+                    return """
+                    {
+                      "interface_mode": "chat_search",
+                      "intent": "supplier_search",
+                      "workflow_stage": "searching",
+                      "confidence": 0.95,
+                      "reason_codes": ["catalog_search"],
+                      "brief_update": {},
+                      "search_requests": [
+                        {
+                          "query": "радиомикрофон",
+                          "service_category": "звук",
+                          "filters": {
+                            "supplier_city_normalized": "екатеринбург",
+                            "category": null,
+                            "supplier_status_normalized": null,
+                            "has_vat": null,
+                            "vat_mode": null,
+                            "unit_price_min": null,
+                            "unit_price_max": null
+                          },
+                          "priority": 1,
+                          "limit": 8
+                        }
+                      ],
+                      "tool_intents": ["search_items"],
+                      "missing_fields": [],
+                      "clarification_questions": []
+                    }
+                    """
+                return "Нашел варианты в каталоге. Это предварительные кандидаты."
+
+        set_catalog_status(ready=True, stage="ready", row_count=1565)
+
+        with patch("app.main.PriceSearcher", FakeSearcher), patch("app.main.LMStudioClient", FakeChatClient):
+            response = self.client.post(
+                "/api/chat",
+                json={"message": "Найди радиомикрофоны в Екатеринбурге", "mode": "brief"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(FakeSearcher.calls[0]["query"], "радиомикрофон")
+        self.assertEqual(
+            FakeSearcher.calls[0]["filters"],
+            {"city": "екатеринбург"},
+        )
+        self.assertEqual(response.json()["route"]["interface_mode"], "chat_search")
+        self.assertEqual(response.json()["items"][0]["payload"]["id"], "664")
+        self.assertIn("предварительные кандидаты", response.json()["message"])
+
+    def test_brief_chat_keeps_dialog_context_between_turns(self):
+        class FakeSearcher:
+            def __init__(self, settings):
+                pass
+
+            def search(self, query, limit=8):
+                return []
+
+        class FakeChatClient:
+            prompts = []
+
+            def __init__(self, settings):
+                pass
+
+            def complete(self, system, user):
+                FakeChatClient.prompts.append(user)
+                return f"Ответ {len(FakeChatClient.prompts)}"
+
+        set_catalog_status(ready=True, stage="ready", row_count=1565)
+
+        with patch("app.main.PriceSearcher", FakeSearcher), patch("app.main.LMStudioClient", FakeChatClient):
+            first = self.client.post(
+                "/api/chat",
+                json={"message": "Нужен офлайн корпоратив в Москве на 30 человек", "mode": "brief"},
+            )
+            second = self.client.post(
+                "/api/chat",
+                json={"message": "Нужен ужин и регистрация гостей", "mode": "brief"},
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertIn("Нужен офлайн корпоратив в Москве на 30 человек", FakeChatClient.prompts[1])
+        self.assertIn("Ответ 1", FakeChatClient.prompts[1])
+        self.assertEqual(second.json()["brief_state"]["conversation_turns"], 2)
+
+    def test_chat_reset_clears_brief_context(self):
+        class FakeSearcher:
+            def __init__(self, settings):
+                pass
+
+            def search(self, query, limit=8):
+                return []
+
+        class FakeChatClient:
+            prompts = []
+
+            def __init__(self, settings):
+                pass
+
+            def complete(self, system, user):
+                FakeChatClient.prompts.append(user)
+                return "Ответ"
+
+        set_catalog_status(ready=True, stage="ready", row_count=1565)
+
+        with patch("app.main.PriceSearcher", FakeSearcher), patch("app.main.LMStudioClient", FakeChatClient):
+            self.client.post(
+                "/api/chat",
+                json={"message": "Нужен офлайн корпоратив в Москве на 30 человек", "mode": "brief"},
+            )
+            reset = self.client.post("/api/chat/reset")
+            response = self.client.post(
+                "/api/chat",
+                json={"message": "Теперь нужен форум в Казани", "mode": "brief"},
+            )
+
+        self.assertEqual(reset.status_code, 200)
+        self.assertEqual(reset.json()["conversation_turns"], 0)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Нужен офлайн корпоратив в Москве", FakeChatClient.prompts[-1])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,11 @@
+.DS_Store
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.uv-cache/
+node_modules/
+dist/
+.vite/
+coverage/
