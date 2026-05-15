@@ -140,6 +140,7 @@ class BriefState:
     confirmed_requirements: list[str] = field(default_factory=list)
     service_needs: dict[str, ServiceNeed] = field(default_factory=default_service_needs)
     selected_price_items: list[dict[str, Any]] = field(default_factory=list)
+    last_visible_search_candidates: list[dict[str, Any]] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=list)
     conversation_history: list[dict[str, str]] = field(default_factory=list)
@@ -166,6 +167,7 @@ class BriefState:
                 for service_type, need in self.service_needs.items()
             },
             "selected_price_items": self.selected_price_items,
+            "last_visible_search_candidates": self.last_visible_search_candidates,
             "open_questions": self.open_questions,
             "assumptions": self.assumptions,
             "conversation_turns": sum(

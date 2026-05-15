@@ -61,6 +61,28 @@ def _ordered_unique(values: list[str]) -> list[str]:
     return result
 
 
+def _visible_candidates_from_state(state: BriefState) -> list[dict[str, Any]]:
+    visible_candidates: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for need in state.service_needs.values():
+        for item in need.candidate_items:
+            item_id = _candidate_item_id(item)
+            if item_id and item_id in seen_ids:
+                continue
+            if item_id:
+                seen_ids.add(item_id)
+            visible_candidates.append(item)
+
+    for item in state.last_visible_search_candidates:
+        item_id = _candidate_item_id(item)
+        if item_id and item_id in seen_ids:
+            continue
+        if item_id:
+            seen_ids.add(item_id)
+        visible_candidates.append(item)
+    return visible_candidates
+
+
 def _select_visible_items(
     *,
     state: BriefState,
@@ -255,11 +277,7 @@ def run_argus_turn(
     chat_client: ChatClient | None = None,
     ui_mode: str = "brief",
 ) -> dict[str, Any]:
-    visible_candidates = [
-        item
-        for need in state.service_needs.values()
-        for item in need.candidate_items
-    ]
+    visible_candidates = _visible_candidates_from_state(state)
     route = route_message(
         message=message,
         brief_state=state,
@@ -291,6 +309,7 @@ def run_argus_turn(
 
     if route.interface_mode == "chat_search" and route.search_requests:
         found_items = _search_catalog_from_route(route, searcher)
+        state.last_visible_search_candidates = found_items[:10]
         answer = _compose_search_answer(
             state=state,
             message=message,

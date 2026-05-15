@@ -456,6 +456,113 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()["items"][0]["payload"]["id"], "664")
         self.assertIn("предварительные кандидаты", response.json()["message"])
 
+    def test_chat_endpoint_selects_previous_ad_hoc_search_result_by_id(self):
+        class FakeSearcher:
+            calls = []
+
+            def __init__(self, settings):
+                pass
+
+            def search(self, query, limit=8, filters=None):
+                FakeSearcher.calls.append({"query": query, "limit": limit, "filters": filters})
+                return [
+                    {
+                        "score": 0.88,
+                        "payload": {
+                            "id": "664",
+                            "name": "Радиомикрофон",
+                            "unit": "шт",
+                            "unit_price": 1230,
+                            "supplier": "Премьер-Шоу",
+                            "supplier_city": "Екатеринбург",
+                            "quantity_kind": "fixed",
+                        },
+                    }
+                ]
+
+        class FakeChatClient:
+            def __init__(self, settings):
+                pass
+
+            def complete(self, system, user):
+                if "ARGUS Router" not in system:
+                    return "Ответ ассистента"
+                if "Выбери ID 664" in user:
+                    return """
+                    {
+                      "interface_mode": "brief_workspace",
+                      "intent": "selection",
+                      "workflow_stage": "search_results_shown",
+                      "confidence": 0.95,
+                      "reason_codes": ["explicit_selection"],
+                      "brief_update": {},
+                      "search_requests": [],
+                      "tool_intents": ["select_item"],
+                      "missing_fields": [],
+                      "clarification_questions": []
+                    }
+                    """
+                return """
+                {
+                  "interface_mode": "chat_search",
+                  "intent": "supplier_search",
+                  "workflow_stage": "searching",
+                  "confidence": 0.95,
+                  "reason_codes": ["catalog_search"],
+                  "brief_update": {},
+                  "search_requests": [
+                    {
+                      "query": "радиомикрофон",
+                      "service_category": "звук",
+                      "filters": {
+                        "supplier_city_normalized": null,
+                        "category": null,
+                        "supplier_status_normalized": null,
+                        "has_vat": null,
+                        "vat_mode": null,
+                        "unit_price_min": null,
+                        "unit_price_max": null
+                      },
+                      "priority": 1,
+                      "limit": 8
+                    }
+                  ],
+                  "tool_intents": ["search_items"],
+                  "missing_fields": [],
+                  "clarification_questions": []
+                }
+                """
+
+        set_catalog_status(ready=True, stage="ready", row_count=1565)
+
+        with patch("app.main.PriceSearcher", FakeSearcher), patch("app.main.LMStudioClient", FakeChatClient):
+            search_response = self.client.post(
+                "/api/chat",
+                json={"message": "Найди радиомикрофоны", "mode": "brief"},
+            )
+            selection_response = self.client.post(
+                "/api/chat",
+                json={"message": "Выбери ID 664", "mode": "brief"},
+            )
+
+        self.assertEqual(search_response.status_code, 200)
+        self.assertEqual(search_response.json()["items"][0]["payload"]["id"], "664")
+        self.assertEqual(selection_response.status_code, 200)
+        selected_price_item_ids = [
+            item["payload"]["id"]
+            for item in selection_response.json()["brief_state"]["selected_price_items"]
+        ]
+        self.assertEqual(
+            selected_price_item_ids,
+            ["664"],
+        )
+        self.assertEqual(
+            [line["item_id"] for line in selection_response.json()["budget"]["lines"]],
+            ["664"],
+        )
+        self.assertEqual(selection_response.json()["budget"]["total"], 1230.0)
+        self.assertIn("ID 664", selection_response.json()["message"])
+
     def test_brief_chat_keeps_dialog_context_between_turns(self):
         class FakeSearcher:
             def __init__(self, settings):
