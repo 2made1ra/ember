@@ -39,50 +39,31 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn("authorization", response.json()["detail"].lower())
 
-    def test_catalog_status_accepts_supabase_bearer_token(self):
+    def test_catalog_status_accepts_local_bearer_token(self):
         app.dependency_overrides.clear()
-        supabase_response = Mock()
-        supabase_response.raise_for_status.return_value = None
-        supabase_response.json.return_value = {
+
+        store = Mock()
+        store.get_user_for_token.return_value = {
             "id": "user-1",
             "email": "demo@example.com",
+            "app_metadata": {"role": "user"},
         }
 
-        with patch.dict(
-            "os.environ",
-            {
-                "SUPABASE_URL": "https://project-ref.supabase.co",
-                "SUPABASE_PUBLISHABLE_KEY": "publishable-key",
-            },
-            clear=True,
-        ), patch("app.auth.httpx.get", return_value=supabase_response) as get:
+        with patch("app.auth.get_auth_store", return_value=store):
             response = self.client.get(
                 "/api/catalog/status",
                 headers={"Authorization": "Bearer valid-token"},
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(str(get.call_args.args[0]), "https://project-ref.supabase.co/auth/v1/user")
-        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer valid-token")
-        self.assertEqual(get.call_args.kwargs["headers"]["apikey"], "publishable-key")
-        self.assertIs(get.call_args.kwargs["trust_env"], False)
+        store.get_user_for_token.assert_called_once_with("valid-token")
 
-    def test_catalog_status_rejects_invalid_supabase_token(self):
+    def test_catalog_status_rejects_invalid_local_token(self):
         app.dependency_overrides.clear()
-        request = httpx.Request("GET", "https://project-ref.supabase.co/auth/v1/user")
-        response = httpx.Response(status_code=401, request=request)
+        store = Mock()
+        store.get_user_for_token.return_value = None
 
-        with patch.dict(
-            "os.environ",
-            {
-                "SUPABASE_URL": "https://project-ref.supabase.co",
-                "SUPABASE_PUBLISHABLE_KEY": "publishable-key",
-            },
-            clear=True,
-        ), patch(
-            "app.auth.httpx.get",
-            side_effect=httpx.HTTPStatusError("Unauthorized", request=request, response=response),
-        ):
+        with patch("app.auth.get_auth_store", return_value=store):
             result = self.client.get(
                 "/api/catalog/status",
                 headers={"Authorization": "Bearer invalid-token"},
@@ -90,6 +71,87 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(result.status_code, 401)
         self.assertIn("invalid", result.json()["detail"].lower())
+
+    def test_auth_signup_returns_bearer_session(self):
+        app.dependency_overrides.clear()
+        store = Mock()
+        store.create_user.return_value = {
+            "id": "user-1",
+            "email": "demo@example.com",
+            "app_metadata": {"role": "user"},
+        }
+        store.create_session.return_value = {
+            "access_token": "local-token",
+            "token_type": "bearer",
+            "expires_in": 3600,
+            "user": store.create_user.return_value,
+        }
+
+        with patch("app.main.get_auth_store", return_value=store):
+            response = self.client.post(
+                "/api/auth/signup",
+                json={"email": "demo@example.com", "password": "developer-password"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["access_token"], "local-token")
+        self.assertEqual(response.json()["user"]["email"], "demo@example.com")
+        store.create_user.assert_called_once_with("demo@example.com", "developer-password", role="user")
+        store.create_session.assert_called_once_with(store.create_user.return_value)
+
+    def test_auth_signin_rejects_bad_credentials(self):
+        app.dependency_overrides.clear()
+        store = Mock()
+        store.authenticate.return_value = None
+
+        with patch("app.main.get_auth_store", return_value=store):
+            response = self.client.post(
+                "/api/auth/signin",
+                json={"email": "demo@example.com", "password": "wrong-password"},
+            )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("invalid", response.json()["detail"].lower())
+
+    def test_auth_session_returns_current_user(self):
+        app.dependency_overrides.clear()
+        store = Mock()
+        store.get_user_for_token.return_value = {
+            "id": "user-1",
+            "email": "demo@example.com",
+            "app_metadata": {"role": "user"},
+        }
+
+        with patch("app.auth.get_auth_store", return_value=store):
+            response = self.client.get(
+                "/api/auth/session",
+                headers={"Authorization": "Bearer local-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["user"]["email"], "demo@example.com")
+
+    def test_auth_logout_revokes_current_token(self):
+        app.dependency_overrides.clear()
+        store = Mock()
+        store.get_user_for_token.return_value = {
+            "id": "user-1",
+            "email": "demo@example.com",
+            "app_metadata": {"role": "user"},
+        }
+
+        with patch("app.auth.get_auth_store", return_value=store), patch(
+            "app.main.get_auth_store",
+            return_value=store,
+        ):
+            response = self.client.post(
+                "/api/auth/logout",
+                headers={"Authorization": "Bearer local-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+        store.revoke_token.assert_called_once_with("local-token")
 
     def test_catalog_status_starts_without_loaded_catalog(self):
         response = self.client.get("/api/catalog/status")

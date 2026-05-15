@@ -13,9 +13,10 @@ test("ARGUS MVP app exposes upload gate, brief mode, and semantic search mode", 
   assert.match(appSource, /className="auth-title">ARGUS/);
   assert.match(appSource, /Зарегистрироваться/);
   assert.match(appSource, /Выйти/);
-  assert.match(appSource, /getSession/);
-  assert.match(appSource, /signInWithPassword/);
+  assert.match(appSource, /restoreSession/);
+  assert.match(appSource, /signIn/);
   assert.match(appSource, /signUp/);
+  assert.match(appSource, /logoutAuth/);
   assert.match(appSource, /minLength=\{mode === "signup" \? 6 : undefined\}/);
   assert.match(appSource, /Authorization/);
   assert.match(appSource, /Bearer \$\{accessToken\}/);
@@ -48,13 +49,15 @@ test("ARGUS MVP app exposes upload gate, brief mode, and semantic search mode", 
   assert.match(cssSource, /\.mode-tab:disabled/);
 });
 
-test("Supabase client reads Vite environment configuration", () => {
-  const clientSource = readFileSync(new URL("../src/supabaseClient.js", import.meta.url), "utf8");
+test("Local auth client stores bearer sessions", () => {
+  const clientSource = readFileSync(new URL("../src/authClient.js", import.meta.url), "utf8");
 
-  assert.match(clientSource, /@supabase\/supabase-js/);
-  assert.match(clientSource, /VITE_SUPABASE_URL/);
-  assert.match(clientSource, /VITE_SUPABASE_PUBLISHABLE_KEY/);
-  assert.match(clientSource, /createClient/);
+  assert.match(clientSource, /ARGUS_AUTH_SESSION/);
+  assert.match(clientSource, /signIn/);
+  assert.match(clientSource, /signUp/);
+  assert.match(clientSource, /restoreSession/);
+  assert.match(clientSource, /clearSession/);
+  assert.doesNotMatch(clientSource, /supabase/i);
 });
 
 test("Vite reads shared environment variables from the project root", () => {

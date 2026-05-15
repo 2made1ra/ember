@@ -2,60 +2,43 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 from fastapi import HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .config import get_settings
+from .auth_store import AuthStoreError, get_auth_store
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def require_user(
+def bearer_token(
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
-) -> dict[str, Any]:
+) -> str:
     if credentials is None or credentials.scheme.lower() != "bearer" or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authorization bearer token is required",
         )
+    return credentials.credentials
 
-    settings = get_settings()
-    if not settings.supabase_url or not settings.supabase_publishable_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supabase auth is not configured",
-        )
 
-    url = f"{settings.supabase_url.rstrip('/')}/auth/v1/user"
-    headers = {
-        "Authorization": f"Bearer {credentials.credentials}",
-        "apikey": settings.supabase_publishable_key,
-    }
+def require_user(token: str = Security(bearer_token)) -> dict[str, Any]:
     try:
-        response = httpx.get(url, headers=headers, timeout=5.0, trust_env=False)
-        response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN}:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid Supabase access token",
-            ) from exc
+        user = get_auth_store().get_user_for_token(token)
+    except AuthStoreError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supabase auth validation failed",
+            detail=str(exc),
         ) from exc
-    except httpx.RequestError as exc:
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supabase auth is unavailable",
+            detail="PostgreSQL auth is unavailable",
         ) from exc
 
-    user = response.json()
-    if not isinstance(user, dict) or not user.get("id"):
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Supabase user response",
+            detail="Invalid bearer token",
         )
     return user

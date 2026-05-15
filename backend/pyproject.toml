@@ -1,6 +1,6 @@
 [project]
 name = "argus-brief-backend"
-version = "0.1.0"
+version = "0.2.0"
 description = "FastAPI backend for the ARGUS Brief Agent MVP"
 requires-python = ">=3.11"
 dependencies = [
@@ -8,6 +8,7 @@ dependencies = [
     "httpx==0.28.1",
     "langchain-core>=0.3.0,<2",
     "langgraph>=0.2.0,<2",
+    "psycopg[binary]>=3.2,<4",
     "python-multipart==0.0.20",
     "qdrant-client==1.16.2",
     "uvicorn[standard]==0.38.0",

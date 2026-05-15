@@ -1,83 +1,78 @@
 import unittest
 from unittest.mock import Mock, patch
 
-import httpx
-
+from app.auth_store import DuplicateUserError
 from app.config import Settings
 from app.dev_admin import create_dev_admin_user
 
 
 class DevAdminTests(unittest.TestCase):
-    def test_create_dev_admin_user_posts_supabase_admin_payload(self):
+    def test_create_dev_admin_user_creates_local_admin(self):
         settings = Settings(
-            supabase_url="https://project-ref.supabase.co",
-            supabase_service_role_key="service-role-key",
+            database_url="postgresql://argus:argus@localhost:5432/argus",
             dev_admin_email="developer@example.com",
             dev_admin_password="developer-password",
         )
-        supabase_response = Mock()
-        supabase_response.raise_for_status.return_value = None
-        supabase_response.json.return_value = {
+        store = Mock()
+        store.create_user.return_value = {
             "id": "user-1",
             "email": "developer@example.com",
             "app_metadata": {"role": "admin"},
         }
 
-        with patch("app.dev_admin.httpx.post", return_value=supabase_response) as post:
+        with patch("app.dev_admin.AuthStore", return_value=store):
             result = create_dev_admin_user(settings)
 
         self.assertEqual(result["id"], "user-1")
         self.assertEqual(result["email"], "developer@example.com")
-        self.assertEqual(result["role"], "admin")
-        self.assertEqual(str(post.call_args.args[0]), "https://project-ref.supabase.co/auth/v1/admin/users")
-        self.assertIs(post.call_args.kwargs["trust_env"], False)
-        self.assertEqual(
-            post.call_args.kwargs["headers"],
-            {
-                "Authorization": "Bearer service-role-key",
-                "apikey": "service-role-key",
-                "Content-Type": "application/json",
-            },
-        )
-        self.assertEqual(
-            post.call_args.kwargs["json"],
-            {
-                "email": "developer@example.com",
-                "password": "developer-password",
-                "email_confirm": True,
-                "app_metadata": {"role": "admin"},
-            },
+        self.assertEqual(result["app_metadata"]["role"], "admin")
+        store.create_user.assert_called_once_with(
+            "developer@example.com",
+            "developer-password",
+            role="admin",
         )
 
-    def test_create_dev_admin_user_requires_service_role_key(self):
+    def test_create_dev_admin_user_requires_password(self):
         settings = Settings(
-            supabase_url="https://project-ref.supabase.co",
+            database_url="postgresql://argus:argus@localhost:5432/argus",
             dev_admin_email="developer@example.com",
-            dev_admin_password="developer-password",
         )
 
-        with self.assertRaisesRegex(ValueError, "SUPABASE_SERVICE_ROLE_KEY"):
+        with self.assertRaisesRegex(ValueError, "DEV_ADMIN_PASSWORD"):
             create_dev_admin_user(settings)
 
-    def test_create_dev_admin_user_raises_clear_message_for_supabase_error(self):
+    def test_create_dev_admin_user_is_idempotent_for_same_password(self):
         settings = Settings(
-            supabase_url="https://project-ref.supabase.co",
-            supabase_service_role_key="service-role-key",
+            database_url="postgresql://argus:argus@localhost:5432/argus",
             dev_admin_email="developer@example.com",
             dev_admin_password="developer-password",
         )
-        request = httpx.Request("POST", "https://project-ref.supabase.co/auth/v1/admin/users")
-        response = httpx.Response(
-            status_code=422,
-            json={"msg": "A user with this email address has already been registered"},
-            request=request,
-        )
+        store = Mock()
+        store.create_user.side_effect = DuplicateUserError("exists")
+        store.authenticate.return_value = {
+            "id": "user-1",
+            "email": "developer@example.com",
+            "app_metadata": {"role": "admin"},
+        }
 
-        with patch(
-            "app.dev_admin.httpx.post",
-            side_effect=httpx.HTTPStatusError("Unprocessable Entity", request=request, response=response),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "already been registered"):
+        with patch("app.dev_admin.AuthStore", return_value=store):
+            result = create_dev_admin_user(settings)
+
+        self.assertEqual(result["email"], "developer@example.com")
+        store.authenticate.assert_called_once_with("developer@example.com", "developer-password")
+
+    def test_create_dev_admin_user_rejects_existing_user_with_different_password(self):
+        settings = Settings(
+            database_url="postgresql://argus:argus@localhost:5432/argus",
+            dev_admin_email="developer@example.com",
+            dev_admin_password="developer-password",
+        )
+        store = Mock()
+        store.create_user.side_effect = DuplicateUserError("exists")
+        store.authenticate.return_value = None
+
+        with patch("app.dev_admin.AuthStore", return_value=store):
+            with self.assertRaisesRegex(RuntimeError, "different password"):
                 create_dev_admin_user(settings)
 
 

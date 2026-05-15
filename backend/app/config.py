@@ -12,6 +12,13 @@ def env_optional(name: str) -> str | None:
     return os.getenv(name)
 
 
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if not value:
+        return default
+    return int(value)
+
+
 def env_first(names: tuple[str, ...]) -> str | None:
     for name in names:
         value = os.getenv(name)
@@ -85,12 +92,14 @@ class Settings:
     qdrant_collection: str = field(
         default_factory=lambda: env_str("QDRANT_COLLECTION", "argus_price_items")
     )
-    supabase_url: str | None = field(default_factory=lambda: env_optional("SUPABASE_URL"))
-    supabase_publishable_key: str | None = field(
-        default_factory=lambda: env_optional("SUPABASE_PUBLISHABLE_KEY")
+    database_url: str = field(
+        default_factory=lambda: env_str(
+            "DATABASE_URL",
+            "postgresql://argus:argus@127.0.0.1:5432/argus",
+        )
     )
-    supabase_service_role_key: str | None = field(
-        default_factory=lambda: env_optional("SUPABASE_SERVICE_ROLE_KEY")
+    auth_session_ttl_seconds: int = field(
+        default_factory=lambda: env_int("AUTH_SESSION_TTL_SECONDS", 60 * 60 * 24 * 7)
     )
     dev_admin_email: str | None = field(default_factory=lambda: env_optional("DEV_ADMIN_EMAIL"))
     dev_admin_password: str | None = field(default_factory=lambda: env_optional("DEV_ADMIN_PASSWORD"))

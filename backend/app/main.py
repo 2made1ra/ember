@@ -6,7 +6,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .agent import run_argus_turn
-from .auth import require_user
+from .auth import bearer_token, require_user
+from .auth_store import AuthStoreError, DuplicateUserError, get_auth_store
 from .config import get_settings
 from .errors import DependencyUnavailableError
 from .ingest import ingest_catalog
@@ -45,8 +46,63 @@ class SearchRequest(BaseModel):
     limit: int = Field(default=3, ge=1, le=10)
 
 
+class AuthRequest(BaseModel):
+    email: str = Field(min_length=3)
+    password: str = Field(min_length=6)
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/signup")
+def auth_signup(request: AuthRequest) -> dict:
+    try:
+        user = get_auth_store().create_user(request.email, request.password, role="user")
+    except DuplicateUserError as exc:
+        raise HTTPException(status_code=409, detail="User already exists") from exc
+    except AuthStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL auth is unavailable") from exc
+    try:
+        return get_auth_store().create_session(user)
+    except AuthStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL auth is unavailable") from exc
+
+
+@app.post("/api/auth/signin")
+def auth_signin(request: AuthRequest) -> dict:
+    try:
+        user = get_auth_store().authenticate(request.email, request.password)
+    except AuthStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL auth is unavailable") from exc
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    try:
+        return get_auth_store().create_session(user)
+    except AuthStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL auth is unavailable") from exc
+
+
+@app.get("/api/auth/session")
+def auth_session(user: dict = Depends(require_user)) -> dict:
+    return {"user": user}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(
+    _user: dict = Depends(require_user),
+    token: str = Depends(bearer_token),
+) -> dict[str, str]:
+    get_auth_store().revoke_token(token)
     return {"status": "ok"}
 
 

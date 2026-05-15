@@ -9,3 +9,5 @@ node_modules/
 dist/
 .vite/
 coverage/
+supabase/.branches/
+supabase/.temp/

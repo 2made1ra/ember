@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { isSupabaseConfigured, supabase } from "./supabaseClient";
+import { logout as logoutAuth, restoreSession, signIn, signUp } from "./authClient";
 
 const P = {
   eye: ["M2 12s4-8 10-8 10 8 10 8-4 8-10 8S2 12 2 12z", "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"],
@@ -745,33 +745,20 @@ function AuthGate({ onSession }) {
 
   const submit = async (event) => {
     event.preventDefault();
-    if (!supabase || loading) return;
+    if (loading) return;
 
     setLoading(true);
     setError("");
     setMessage("");
     const credentials = { email: email.trim(), password };
-    let result;
     try {
-      result = mode === "signup"
-        ? await supabase.auth.signUp(credentials)
-        : await supabase.auth.signInWithPassword(credentials);
+      const session = mode === "signup" ? await signUp(credentials) : await signIn(credentials);
+      onSession(session);
     } catch (authError) {
-      setLoading(false);
       setError(authError.message || "Не удалось выполнить запрос авторизации.");
-      return;
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
-    if (result.error) {
-      setError(result.error.message);
-      return;
-    }
-    if (result.data.session) {
-      onSession(result.data.session);
-      return;
-    }
-    setMessage("Проверьте почту и подтвердите регистрацию.");
   };
 
   return (
@@ -802,7 +789,7 @@ function AuthGate({ onSession }) {
         </label>
         {error && <div className="auth-error">{error}</div>}
         {message && <div className="auth-message">{message}</div>}
-        <button className="auth-submit" type="submit" disabled={!isSupabaseConfigured || loading}>
+        <button className="auth-submit" type="submit" disabled={loading}>
           {loading ? "Проверка..." : mode === "signin" ? "Войти" : "Создать аккаунт"}
         </button>
         <button
@@ -857,29 +844,19 @@ export default function App() {
   const userEmail = session?.user?.email || "user";
 
   useEffect(() => {
-    if (!supabase) {
-      setAuthReady(true);
-      return undefined;
-    }
-
     let active = true;
-    supabase.auth.getSession()
-      .then(({ data }) => {
+    restoreSession()
+      .then((storedSession) => {
         if (!active) return;
-        setSession(data.session);
+        setSession(storedSession);
         setAuthReady(true);
       })
       .catch(() => {
         if (active) setAuthReady(true);
       });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      setAuthReady(true);
-    });
 
     return () => {
       active = false;
-      listener.subscription.unsubscribe();
     };
   }, []);
 
@@ -890,7 +867,7 @@ export default function App() {
   };
 
   const logout = async () => {
-    if (supabase) await supabase.auth.signOut();
+    await logoutAuth(accessToken);
     setSession(null);
     setMessages([]);
     setMode("brief");

@@ -45,13 +45,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.chat_base_url, "https://example.test/v1")
         self.assertEqual(settings.chat_model, "custom-chat-model")
 
-    def test_settings_reads_supabase_auth_configuration(self):
+    def test_settings_reads_postgres_auth_configuration(self):
         with patch.dict(
             os.environ,
             {
-                "SUPABASE_URL": "https://project-ref.supabase.co",
-                "SUPABASE_PUBLISHABLE_KEY": "publishable-key",
-                "SUPABASE_SERVICE_ROLE_KEY": "service-role-key",
+                "DATABASE_URL": "postgresql://argus:argus@localhost:5432/argus",
+                "AUTH_SESSION_TTL_SECONDS": "7200",
                 "DEV_ADMIN_EMAIL": "developer@example.com",
                 "DEV_ADMIN_PASSWORD": "developer-password",
             },
@@ -59,9 +58,8 @@ class ConfigTests(unittest.TestCase):
         ):
             settings = Settings()
 
-        self.assertEqual(settings.supabase_url, "https://project-ref.supabase.co")
-        self.assertEqual(settings.supabase_publishable_key, "publishable-key")
-        self.assertEqual(settings.supabase_service_role_key, "service-role-key")
+        self.assertEqual(settings.database_url, "postgresql://argus:argus@localhost:5432/argus")
+        self.assertEqual(settings.auth_session_ttl_seconds, 7200)
         self.assertEqual(settings.dev_admin_email, "developer@example.com")
         self.assertEqual(settings.dev_admin_password, "developer-password")
         self.assertEqual(settings.dev_admin_role, "admin")

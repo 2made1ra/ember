@@ -1,6 +1,6 @@
 {
   "name": "argus-brief-agent-frontend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,6 @@
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.105.4",
     "@vitejs/plugin-react": "latest",
     "react": "latest",
     "react-dom": "latest",
