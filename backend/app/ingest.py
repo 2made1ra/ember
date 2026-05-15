@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from .catalog import CatalogValidationError, parse_catalog_csv
+from .catalog_store import PostgresCatalogStore
 from .config import Settings
 from .errors import DependencyUnavailableError
 from .state import reset_brief_state, set_catalog_status
-from .vector_store import QdrantPriceStore
 
 
 def ingest_catalog(content: bytes, settings: Settings) -> None:
@@ -32,15 +32,14 @@ def ingest_catalog(content: bytes, settings: Settings) -> None:
 
         vector_size = len(vectors[0])
         set_catalog_status(
-            stage="qdrant",
-            message="Пересоздаю коллекцию Qdrant",
+            stage="postgres",
+            message="Заменяю каталог в PostgreSQL/pgvector",
             vector_size=vector_size,
         )
 
-        store = QdrantPriceStore(settings)
-        store.recreate_collection(vector_size)
-        set_catalog_status(stage="uploading", message="Загружаю позиции в Qdrant")
-        store.upsert_items(items, vectors)
+        store = PostgresCatalogStore(settings)
+        set_catalog_status(stage="uploading", message="Загружаю позиции в PostgreSQL/pgvector")
+        store.replace_catalog(items)
 
         reset_brief_state()
         set_catalog_status(

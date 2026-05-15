@@ -250,7 +250,7 @@ class ApiTests(unittest.TestCase):
                 pass
 
             def search(self, query, limit=8, filters=None):
-                raise DependencyUnavailableError("Qdrant недоступен")
+                raise DependencyUnavailableError("PostgreSQL недоступен")
 
         set_catalog_status(ready=True, stage="ready")
         client = TestClient(app, raise_server_exceptions=False)
@@ -268,7 +268,7 @@ class ApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["detail"], "Qdrant недоступен")
+        self.assertEqual(response.json()["detail"], "PostgreSQL недоступен")
 
     def test_chat_endpoint_routes_search_requests_on_backend(self):
         class FakeSearcher:

@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .config import Settings
 from .catalog import normalize_city
+from .catalog_store import PostgresCatalogStore
+from .config import Settings
 from .lm_studio import LMStudioClient
-from .vector_store import QdrantPriceStore
 
 
 DEFAULT_CANDIDATE_LIMIT = 20
@@ -79,7 +79,7 @@ def rerank_results(query: str, results: list[dict[str, Any]], limit: int) -> lis
 class PriceSearcher:
     def __init__(self, settings: Settings):
         self.lm = LMStudioClient(settings)
-        self.store = QdrantPriceStore(settings)
+        self.store = PostgresCatalogStore(settings)
 
     def search(
         self,

@@ -1,13 +1,13 @@
 # ARGUS Brief Agent MVP
 
-Локальный MVP для загрузки CSV-каталога цен с готовыми embeddings, индексации в Qdrant, сбора брифа и простого семантического поиска в ARGUS-style чате.
+Локальный MVP для загрузки CSV-каталога цен с готовыми embeddings, индексации в PostgreSQL/pgvector, сбора брифа и простого семантического поиска в ARGUS-style чате.
 
 ## Требования
 
 - Python 3.11+
 - uv для управления Python-зависимостями
 - Node.js 20+
-- Docker для локального PostgreSQL и Qdrant
+- Docker для локального PostgreSQL с pgvector
 - OpenAI-compatible chat API
 - OpenAI-compatible embedding API
 
@@ -31,14 +31,13 @@ make install
 
 `make env` создаёт `.env` из `.env.example`, если файла ещё нет. После этого заполните `.env` реальными ключами и адресами.
 
-### 2. Поднимите PostgreSQL и Qdrant
+### 2. Поднимите PostgreSQL/pgvector
 
 ```bash
 make db
-make qdrant
 ```
 
-Локальная авторизация хранит пользователей и bearer-сессии в PostgreSQL. Таблицы `auth_users` и `auth_sessions` создаются backend автоматически при первой регистрации, логине, проверке токена или seed-admin запуске.
+Локальная авторизация хранит пользователей и bearer-сессии в PostgreSQL. Каталог цен и векторы хранятся там же через pgvector. Таблицы создаются backend автоматически при первой регистрации, логине, проверке токена, seed-admin запуске, загрузке каталога или поиске.
 
 ### 3. Создайте dev-admin пользователя
 
@@ -93,13 +92,13 @@ make frontend
 
 ### Запуск одной командой
 
-После настройки `.env` и установки зависимостей можно запустить PostgreSQL, Qdrant, backend и frontend одной командой:
+После настройки `.env` и установки зависимостей можно запустить PostgreSQL/pgvector, backend и frontend одной командой:
 
 ```bash
 make dev
 ```
 
-`make dev` запускает PostgreSQL и Qdrant через Docker Compose, затем параллельно стартует FastAPI и Vite. Остановить foreground-процессы можно через `Ctrl+C`, контейнеры останавливаются командой:
+`make dev` запускает PostgreSQL/pgvector через Docker Compose, затем параллельно стартует FastAPI и Vite. Остановить foreground-процессы можно через `Ctrl+C`, контейнер останавливается командой:
 
 ```bash
 make db-down
@@ -111,7 +110,7 @@ make db-down
 
 ```bash
 cp .env.example .env
-docker compose up -d postgres qdrant
+docker compose up -d postgres
 uv sync --project backend
 ```
 
@@ -160,14 +159,9 @@ PYTHONPATH=backend UV_CACHE_DIR=.uv-cache uv run --project backend python -m app
 - `EMBEDDING_BASE_URL` - OpenAI-compatible endpoint для embeddings.
 - `EMBEDDING_MODEL` - embedding model.
 
-### Vector store
+### Local PostgreSQL and pgvector
 
-- `QDRANT_URL` - адрес Qdrant.
-- `QDRANT_COLLECTION` - коллекция с каталогом цен.
-
-### Local PostgreSQL Auth
-
-- `DATABASE_URL` - локальный Postgres URL для пользователей и bearer-сессий.
+- `DATABASE_URL` - локальный Postgres URL для пользователей, bearer-сессий, каталога и pgvector-поиска.
 - `AUTH_SESSION_TTL_SECONDS` - время жизни access token в секундах. По умолчанию 7 дней.
 
 ### Dev/test admin seed
@@ -180,7 +174,7 @@ PYTHONPATH=backend UV_CACHE_DIR=.uv-cache uv run --project backend python -m app
 
 - `NO_PROXY` / `no_proxy` - список локальных адресов, которые не должны уходить в системный proxy. В `.env.example` уже добавлены `localhost`, `127.0.0.1`, `::1`, `0.0.0.0`, `host.docker.internal`.
 
-Makefile дополнительно прокидывает этот bypass в `make backend`, `make seed-admin` и локальные проверки сервисов. Это нужно, если в системе включён HTTP/HTTPS proxy: без bypass запросы к локальным Docker-портам Qdrant и backend могут уходить в proxy и возвращать `503`, `Connection refused` или странные upstream-ошибки.
+Makefile дополнительно прокидывает этот bypass в `make backend`, `make seed-admin` и локальные проверки сервисов. Это нужно, если в системе включён HTTP/HTTPS proxy: без bypass запросы к локальным Docker-портам backend могут уходить в proxy и возвращать `503`, `Connection refused` или странные upstream-ошибки.
 
 Если запросы из браузера к `http://localhost:8000` тоже ломаются, добавьте локальные адреса в bypass системного proxy macOS/browser:
 
@@ -212,7 +206,7 @@ npm run build
 ## Поведение MVP
 
 - Поддерживается один активный каталог.
-- Каждая новая загрузка CSV пересоздаёт коллекцию Qdrant и сбрасывает состояние брифа.
+- Каждая новая загрузка CSV заменяет каталог в PostgreSQL/pgvector и сбрасывает состояние брифа.
 - Колонка `embedding` из CSV используется как готовый вектор каталога.
 - Текст для embedding строится строго как `{name} {unit} {category} {section} {supplier}`.
-- Режим `Семантический поиск` отправляет в embedding-модель голый текст запроса, забирает top-20 кандидатов из Qdrant, переранжирует их по совпадениям слов в `name`, `category`, `section`, `source_text`, `supplier` и пропускает итоговый top-3 через небольшой LangGraph-агент. В чат выводится человекочитаемый список по payload-полям каталога: название, цена, единица, поставщик, город, категория, раздел и ID. Внутренний score не показывается.
+- Режим `Семантический поиск` отправляет в embedding-модель голый текст запроса, забирает top-20 кандидатов из PostgreSQL/pgvector, переранжирует их по совпадениям слов в `name`, `category`, `section`, `source_text`, `supplier` и пропускает итоговый top-3 через небольшой LangGraph-агент. В чат выводится человекочитаемый список по payload-полям каталога: название, цена, единица, поставщик, город, категория, раздел и ID. Внутренний score не показывается.

@@ -52,37 +52,31 @@ def csv_with_embeddings() -> bytes:
 
 
 class FakeStore:
-    vector_size = None
-    upserted_vectors = None
+    items = None
 
     def __init__(self, settings):
         pass
 
-    def recreate_collection(self, vector_size):
-        FakeStore.vector_size = vector_size
-
-    def upsert_items(self, items, vectors):
-        FakeStore.upserted_vectors = vectors
+    def replace_catalog(self, items):
+        FakeStore.items = items
 
 
 class IngestTests(unittest.TestCase):
     def setUp(self):
         reset_app_state()
-        FakeStore.vector_size = None
-        FakeStore.upserted_vectors = None
+        FakeStore.items = None
 
-    def test_ingest_uses_csv_embeddings_without_calling_embedding_client(self):
+    def test_ingest_replaces_pgvector_catalog_with_csv_embeddings_without_calling_embedding_client(self):
         settings = Settings()
 
         with (
-            patch("app.ingest.QdrantPriceStore", FakeStore),
+            patch("app.ingest.PostgresCatalogStore", FakeStore),
             patch("app.ingest.LMStudioClient", create=True) as lm_client,
         ):
             ingest_catalog(csv_with_embeddings(), settings)
 
         lm_client.assert_not_called()
-        self.assertEqual(FakeStore.vector_size, 3)
-        self.assertEqual(FakeStore.upserted_vectors, [[0.1, 0.2, 0.3]])
+        self.assertEqual([item.vector for item in FakeStore.items], [[0.1, 0.2, 0.3]])
         status = get_catalog_status()
         self.assertTrue(status.ready)
         self.assertEqual(status.embedded_count, 1)

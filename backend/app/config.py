@@ -87,11 +87,6 @@ class Settings:
     chat_api_key: str | None = field(
         default_factory=lambda: env_first(("CHAT_API_KEY", "API_KEY", "OPENAI_API_KEY"))
     )
-    qdrant_url: str = field(default_factory=lambda: env_str("QDRANT_URL", "http://localhost:6333"))
-    qdrant_api_key: str | None = field(default_factory=lambda: env_optional("QDRANT_API_KEY"))
-    qdrant_collection: str = field(
-        default_factory=lambda: env_str("QDRANT_COLLECTION", "argus_price_items")
-    )
     database_url: str = field(
         default_factory=lambda: env_str(
             "DATABASE_URL",
