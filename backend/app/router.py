@@ -108,6 +108,27 @@ SEARCH_STOP_WORDS = (
     "цену",
 )
 
+RENDER_BRIEF_WORDS = (
+    "бриф",
+    "черновик",
+    "структур",
+    "итог",
+    "финал",
+    "результат",
+)
+
+RENDER_ACTION_WORDS = (
+    "покажи",
+    "показать",
+    "выведи",
+    "вывести",
+    "отобрази",
+    "дай",
+    "собери",
+    "сформируй",
+    "составь",
+)
+
 SELECTION_WORDS = (
     "выбери",
     "выбрать",
@@ -274,10 +295,42 @@ def _selection_decision() -> RouterDecision:
     )
 
 
+def _looks_like_render_brief(message: str, brief_state: BriefState) -> bool:
+    lowered = message.lower().replace("ё", "е")
+    has_render_word = any(word in lowered for word in RENDER_BRIEF_WORDS)
+    has_action_word = any(word in lowered for word in RENDER_ACTION_WORDS)
+    has_brief_context = bool(
+        brief_state.confirmed_requirements
+        or brief_state.event_type
+        or brief_state.city
+        or brief_state.guests_count
+        or any(need.candidate_items for need in brief_state.service_needs.values())
+        or brief_state.selected_price_items
+    )
+    return has_render_word and has_action_word and has_brief_context
+
+
+def _render_brief_decision() -> RouterDecision:
+    return RouterDecision(
+        interface_mode="brief_workspace",
+        intent="render_brief",
+        workflow_stage="brief_rendered",
+        confidence=0.86,
+        reason_codes=["explicit_render_brief"],
+        brief_update={},
+        search_requests=[],
+        tool_intents=["render_event_brief"],
+        missing_fields=[],
+        clarification_questions=[],
+    )
+
+
 def heuristic_route(message: str, brief_state: BriefState, ui_mode: str = "brief") -> RouterDecision:
     lowered = message.lower().replace("ё", "е")
     if _looks_like_selection(message):
         return _selection_decision()
+    if _looks_like_render_brief(message, brief_state):
+        return _render_brief_decision()
     if ui_mode == "search" or any(word in lowered for word in SEARCH_WORDS):
         return _search_decision(message, brief_state)
 
@@ -311,6 +364,9 @@ def route_message(
     chat_client: ChatClient | None = None,
     visible_candidates: list[dict[str, Any]] | None = None,
 ) -> RouterDecision:
+    if _looks_like_render_brief(message, brief_state):
+        return _render_brief_decision()
+
     if chat_client and should_use_llm_router(message, ui_mode):
         prompt = build_router_prompt(
             message=message,

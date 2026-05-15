@@ -338,8 +338,8 @@ class PostgresCatalogStore:
                     CROSS JOIN lexical_query
                     WHERE
                         to_tsvector('simple', documents.document_text) @@ lexical_query.tsq
-                        OR documents.document_text ILIKE '%' || lexical_query.raw_query || '%'
-                        OR documents.document_text % lexical_query.raw_query
+                        OR documents.document_text ILIKE '%%' || lexical_query.raw_query || '%%'
+                        OR documents.document_text %% lexical_query.raw_query
                     ORDER BY score DESC
                     LIMIT %s
                     """,

@@ -361,6 +361,54 @@ class BriefAgentTests(unittest.TestCase):
         self.assertEqual(budget_response["budget"]["total"], 50000.0)
         self.assertIn("Организация кофе-брейка", budget_response["message"])
 
+    def test_render_brief_request_uses_saved_candidates_without_catalog_brief_search(self):
+        candidate = self._catalog_item(
+            "557",
+            "Организация кофе-брейка",
+            "Комбинат питания",
+            "catering",
+            unit_price=500,
+            quantity_kind="per_guest",
+        )
+        state = BriefState(
+            event_type="конференция",
+            city="Москва",
+            guests_count=100,
+            format="офлайн",
+            budget_tier="стандарт",
+        )
+        state.confirmed_requirements = [
+            "Тип мероприятия: конференция",
+            "Город: Москва",
+            "Участников: 100",
+            "Формат: офлайн",
+            "Бюджетный уровень: стандарт",
+            "Нужен блок: Питание",
+        ]
+        state.service_needs["catering"].status = "needed"
+        state.service_needs["catering"].candidate_items = [candidate]
+
+        class LoopingChatClient:
+            def complete(self, system, user):
+                return "Могу вывести текущую структуру брифа. Подсказать, показать бриф?"
+
+        searcher = RecordingSearcher({"catering": []})
+        response = run_argus_turn(
+            state=state,
+            message="Покажи готовый бриф с результатами",
+            searcher=searcher,
+            chat_client=LoopingChatClient(),
+            ui_mode="brief",
+        )
+
+        self.assertEqual(searcher.calls, [])
+        self.assertEqual(response["route"]["intent"], "render_brief")
+        self.assertEqual(response["brief_state"]["stage"], "brief_rendered")
+        self.assertIn("Черновик брифа мероприятия", response["message"])
+        self.assertIn("ID 557", response["message"])
+        self.assertIn("Организация кофе-брейка", response["message"])
+        self.assertNotIn("Подсказать, показать бриф", response["message"])
+
     def test_budget_uses_variable_and_fixed_quantity_rules(self):
         result = estimate_budget(
             [

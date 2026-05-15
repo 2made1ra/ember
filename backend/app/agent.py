@@ -8,6 +8,7 @@ from .brief import (
     ChatClient,
     Searcher,
     budget_lines_from_results,
+    default_answer,
     estimate_budget,
     format_conversation_history,
     run_brief_turn,
@@ -325,6 +326,22 @@ def run_argus_turn(
             "found_items": found_items[:10],
             "items": found_items[:10],
             "budget": {"lines": [], "total": 0},
+            "route": route.model_dump(),
+        }
+
+    if route.intent == "render_brief" or "render_event_brief" in route.tool_intents:
+        found_items = visible_candidates[:10]
+        budget = estimate_budget(budget_lines_from_results(found_items, state))
+        state.stage = "brief_rendered"
+        answer = default_answer(state, found_items, budget)
+        state.conversation_history.append({"role": "user", "content": message})
+        state.conversation_history.append({"role": "assistant", "content": answer})
+        return {
+            "message": answer,
+            "brief_state": state.to_dict(),
+            "found_items": found_items,
+            "items": found_items,
+            "budget": budget,
             "route": route.model_dump(),
         }
 
