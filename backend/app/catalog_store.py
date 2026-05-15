@@ -200,6 +200,87 @@ class PostgresCatalogStore:
 
         return [{"score": float(row["score"]), "payload": _row_payload(row)} for row in rows]
 
+    def list_suppliers(self, limit: int = 50, query: str | None = None) -> list[dict[str, Any]]:
+        self.ensure_schema()
+        where_sql = ""
+        params: list[Any] = []
+        normalized_query = (query or "").strip()
+        if normalized_query:
+            term = f"%{normalized_query}%"
+            where_sql = "WHERE s.name ILIKE %s OR s.inn ILIKE %s OR s.city ILIKE %s"
+            params.extend([term, term, term])
+        params.append(limit)
+
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        s.id,
+                        s.name,
+                        s.inn,
+                        s.city,
+                        s.status,
+                        COUNT(pi.id) AS item_count,
+                        ARRAY_AGG(DISTINCT pi.service_type) AS service_types,
+                        MIN(pi.unit_price) AS min_price
+                    FROM catalog_suppliers s
+                    LEFT JOIN catalog_price_items pi ON pi.supplier_id = s.id
+                    {where_sql}
+                    GROUP BY s.id, s.name, s.inn, s.city, s.status
+                    ORDER BY LOWER(s.name)
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                ).fetchall()
+        except Exception as exc:
+            raise DependencyUnavailableError(
+                "PostgreSQL недоступен: не удалось получить список поставщиков."
+            ) from exc
+
+        return [_supplier_summary(row) for row in rows]
+
+    def get_supplier(self, supplier_id: str) -> dict[str, Any] | None:
+        self.ensure_schema()
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT
+                        s.id AS supplier_id,
+                        s.name AS supplier_name,
+                        s.inn AS supplier_inn,
+                        s.city AS supplier_city,
+                        s.phone AS supplier_phone,
+                        s.email AS supplier_email,
+                        s.status AS supplier_status,
+                        pi.id AS item_id,
+                        pi.name AS item_name,
+                        pi.category,
+                        pi.unit,
+                        pi.unit_price,
+                        pi.source_text,
+                        pi.section,
+                        pi.has_vat,
+                        pi.service_type,
+                        pi.unit_kind,
+                        pi.quantity_kind
+                    FROM catalog_suppliers s
+                    LEFT JOIN catalog_price_items pi ON pi.supplier_id = s.id
+                    WHERE s.id = %s
+                    ORDER BY pi.service_type, pi.category, pi.name
+                    """,
+                    (supplier_id,),
+                ).fetchall()
+        except Exception as exc:
+            raise DependencyUnavailableError(
+                "PostgreSQL недоступен: не удалось получить поставщика."
+            ) from exc
+
+        if not rows:
+            return None
+        return _supplier_detail(rows)
+
 
 def _row_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -222,6 +303,58 @@ def _row_payload(row: dict[str, Any]) -> dict[str, Any]:
         "supplier_status_normalized": row.get("supplier_status_normalized"),
         "unit_kind": row.get("unit_kind"),
         "quantity_kind": row.get("quantity_kind"),
+    }
+
+
+def _supplier_summary(row: dict[str, Any]) -> dict[str, Any]:
+    service_types = sorted(
+        str(service_type)
+        for service_type in row.get("service_types") or []
+        if service_type
+    )
+    min_price = row.get("min_price")
+    return {
+        "id": row.get("id"),
+        "name": row.get("name"),
+        "inn": row.get("inn"),
+        "city": row.get("city"),
+        "status": row.get("status"),
+        "item_count": int(row.get("item_count") or 0),
+        "service_types": service_types,
+        "min_price": float(min_price) if min_price is not None else None,
+    }
+
+
+def _supplier_detail(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    first = rows[0]
+    items = []
+    for row in rows:
+        if not row.get("item_id"):
+            continue
+        items.append(
+            {
+                "id": row.get("item_id"),
+                "name": row.get("item_name"),
+                "category": row.get("category"),
+                "unit": row.get("unit"),
+                "unit_price": row.get("unit_price"),
+                "source_text": row.get("source_text"),
+                "section": row.get("section"),
+                "has_vat": row.get("has_vat"),
+                "service_type": row.get("service_type"),
+                "unit_kind": row.get("unit_kind"),
+                "quantity_kind": row.get("quantity_kind"),
+            }
+        )
+    return {
+        "id": first.get("supplier_id"),
+        "name": first.get("supplier_name"),
+        "inn": first.get("supplier_inn"),
+        "city": first.get("supplier_city"),
+        "phone": first.get("supplier_phone"),
+        "email": first.get("supplier_email"),
+        "status": first.get("supplier_status"),
+        "items": items,
     }
 
 

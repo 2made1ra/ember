@@ -294,5 +294,97 @@ class PostgresCatalogStoreSearchTests(unittest.TestCase):
         self.assertEqual(second_schema_calls, [])
 
 
+class PostgresCatalogStoreSupplierTests(unittest.TestCase):
+    def setUp(self):
+        PostgresCatalogStore._schema_ready_databases.clear()
+
+    def test_list_suppliers_returns_grouped_supplier_rows_with_sorted_service_types(self):
+        rows = [
+            {
+                "id": "7704856280",
+                "name": "ООО Питание",
+                "inn": "7704856280",
+                "city": "Москва",
+                "status": "Активен",
+                "item_count": 2,
+                "service_types": ["venue", "catering", None],
+                "min_price": 450.0,
+            }
+        ]
+        conn = _Connection(rows)
+        store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+
+        with patch.object(store, "_connect", return_value=conn):
+            suppliers = store.list_suppliers(limit=25, query="питание")
+
+        supplier_sql, supplier_params = conn.calls[-1]
+        self.assertIn("COUNT(pi.id) AS item_count", supplier_sql)
+        self.assertIn("MIN(pi.unit_price) AS min_price", supplier_sql)
+        self.assertIn("s.name ILIKE %s", supplier_sql)
+        self.assertEqual(supplier_params, ("%питание%", "%питание%", "%питание%", 25))
+        self.assertEqual(
+            suppliers,
+            [
+                {
+                    "id": "7704856280",
+                    "name": "ООО Питание",
+                    "inn": "7704856280",
+                    "city": "Москва",
+                    "status": "Активен",
+                    "item_count": 2,
+                    "service_types": ["catering", "venue"],
+                    "min_price": 450.0,
+                }
+            ],
+        )
+
+    def test_get_supplier_returns_metadata_and_items_sorted_by_catalog_fields(self):
+        rows = [
+            {
+                "supplier_id": "7704856280",
+                "supplier_name": "ООО Питание",
+                "supplier_inn": "7704856280",
+                "supplier_city": "Москва",
+                "supplier_phone": "+7",
+                "supplier_email": "sales@example.test",
+                "supplier_status": "Активен",
+                "item_id": "item-1",
+                "item_name": "Кофе-брейк",
+                "category": "Питание",
+                "unit": "чел",
+                "unit_price": 450.0,
+                "source_text": "Кофе и чай",
+                "section": "Кейтеринг",
+                "has_vat": "В т.ч. НДС",
+                "service_type": "catering",
+                "unit_kind": "person",
+                "quantity_kind": "per_guest",
+            }
+        ]
+        conn = _Connection(rows)
+        store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+
+        with patch.object(store, "_connect", return_value=conn):
+            supplier = store.get_supplier("7704856280")
+
+        detail_sql, detail_params = conn.calls[-1]
+        self.assertIn("WHERE s.id = %s", detail_sql)
+        self.assertIn("ORDER BY pi.service_type, pi.category, pi.name", detail_sql)
+        self.assertEqual(detail_params, ("7704856280",))
+        self.assertEqual(supplier["id"], "7704856280")
+        self.assertEqual(supplier["name"], "ООО Питание")
+        self.assertEqual(supplier["items"][0]["id"], "item-1")
+        self.assertEqual(supplier["items"][0]["unit_price"], 450.0)
+
+    def test_get_supplier_returns_none_for_unknown_supplier(self):
+        conn = _Connection([])
+        store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+
+        with patch.object(store, "_connect", return_value=conn):
+            supplier = store.get_supplier("missing")
+
+        self.assertIsNone(supplier)
+
+
 if __name__ == "__main__":
     unittest.main()

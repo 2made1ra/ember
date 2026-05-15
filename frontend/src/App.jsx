@@ -446,11 +446,16 @@ function ArgusOrb({ loading = false }) {
   );
 }
 
-function Sidebar({ status, userEmail, onReset, onLogout }) {
+function Sidebar({ status, userEmail, view, onViewChange, onReset, onLogout }) {
   const initials = (userEmail || "ARGUS")
     .split("@")[0]
     .slice(0, 2)
     .toUpperCase();
+
+  const startNewSession = () => {
+    onViewChange("chat");
+    onReset();
+  };
 
   return (
     <aside className="sidebar">
@@ -465,7 +470,7 @@ function Sidebar({ status, userEmail, onReset, onLogout }) {
       </div>
 
       <nav className="s-nav">
-        <button className="nav-link active" onClick={onReset}>
+        <button className={`nav-link ${view === "chat" ? "active" : ""}`} onClick={startNewSession}>
           <span className="nav-icon"><Icon d={P.edit} size={15} /></span>
           <span className="nav-label">Новая сессия</span>
         </button>
@@ -473,7 +478,12 @@ function Sidebar({ status, userEmail, onReset, onLogout }) {
           <span className="nav-icon"><Icon d={P.search} size={15} /></span>
           <span className="nav-label">Поиск</span>
         </button>
-        <button className="nav-link" type="button">
+        <button
+          className={`nav-link ${view === "catalog" ? "active" : ""}`}
+          type="button"
+          disabled={!status.ready}
+          onClick={() => onViewChange("catalog")}
+        >
           <span className="nav-icon"><Icon d={P.plug} size={15} /></span>
           <span className="nav-label">Каталог</span>
           <span className={`status-dot ${status.ready ? "status-ok" : ""}`} />
@@ -735,6 +745,156 @@ function ChatArea({ mode, messages, loading, onModeChange, onSend }) {
   );
 }
 
+function formatMoney(value) {
+  if (value === null || value === undefined) return "—";
+  return `${Number(value).toLocaleString("ru-RU", { maximumFractionDigits: 0 })} ₽`;
+}
+
+function CatalogView({ accessToken }) {
+  const [suppliers, setSuppliers] = useState([]);
+  const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+  const [selectedSupplier, setSelectedSupplier] = useState(null);
+  const [listLoading, setListLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadSuppliers = async (nextQuery = appliedQuery) => {
+    setListLoading(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({ limit: "50" });
+      if (nextQuery.trim()) params.set("query", nextQuery.trim());
+      const body = await fetchJson(`/api/catalog/suppliers?${params.toString()}`, {}, accessToken);
+      setSuppliers(body.suppliers || []);
+      if (selectedId && !body.suppliers?.some((supplier) => supplier.id === selectedId)) {
+        setSelectedId(null);
+        setSelectedSupplier(null);
+      }
+    } catch (loadError) {
+      setError(loadError.message || "Не удалось загрузить поставщиков.");
+    } finally {
+      setListLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSuppliers("");
+  }, [accessToken]);
+
+  const openSupplier = async (supplierId) => {
+    setSelectedId(supplierId);
+    setDetailLoading(true);
+    setError("");
+    try {
+      const body = await fetchJson(`/api/catalog/suppliers/${encodeURIComponent(supplierId)}`, {}, accessToken);
+      setSelectedSupplier(body.supplier);
+    } catch (loadError) {
+      setSelectedSupplier(null);
+      setError(loadError.message || "Не удалось загрузить поставщика.");
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const submitSearch = (event) => {
+    event.preventDefault();
+    const nextQuery = query.trim();
+    setAppliedQuery(nextQuery);
+    loadSuppliers(nextQuery);
+  };
+
+  return (
+    <div className="catalog-view">
+      <div className="catalog-toolbar">
+        <div>
+          <div className="catalog-title">Каталог поставщиков</div>
+          <div className="catalog-subtitle">{listLoading ? "Загрузка..." : `${suppliers.length} поставщиков`}</div>
+        </div>
+        <form className="catalog-search" onSubmit={submitSearch}>
+          <Icon d={P.search} size={14} />
+          <input
+            type="search"
+            value={query}
+            placeholder="Название, ИНН или город"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </form>
+      </div>
+
+      {error && <div className="catalog-error">{error}</div>}
+
+      <div className="catalog-layout">
+        <div className="supplier-list" aria-busy={listLoading}>
+          {suppliers.map((supplier) => (
+            <button
+              key={supplier.id}
+              type="button"
+              className={`supplier-row ${selectedId === supplier.id ? "supplier-row-active" : ""}`}
+              onClick={() => openSupplier(supplier.id)}
+            >
+              <span className="supplier-main">
+                <span className="supplier-name">{supplier.name}</span>
+                <span className="supplier-meta">
+                  {supplier.city || "Город не указан"} · {supplier.status || "Без статуса"}
+                </span>
+              </span>
+              <span className="supplier-facts">
+                <span>{supplier.item_count || 0} поз.</span>
+                <span>от {formatMoney(supplier.min_price)}</span>
+              </span>
+              <span className="service-chips">
+                {(supplier.service_types || []).slice(0, 4).map((serviceType) => (
+                  <span className="service-chip" key={serviceType}>{serviceType}</span>
+                ))}
+              </span>
+            </button>
+          ))}
+          {!listLoading && suppliers.length === 0 && (
+            <div className="catalog-empty">Поставщики не найдены.</div>
+          )}
+        </div>
+
+        <aside className="supplier-detail">
+          {!selectedId && <div className="detail-empty">Выберите поставщика в списке.</div>}
+          {selectedId && detailLoading && <div className="detail-empty">Загрузка карточки...</div>}
+          {selectedSupplier && !detailLoading && (
+            <>
+              <div className="detail-head">
+                <div>
+                  <div className="detail-title">{selectedSupplier.name}</div>
+                  <div className="detail-meta">{selectedSupplier.city || "Город не указан"} · {selectedSupplier.status || "Без статуса"}</div>
+                </div>
+                <div className="detail-count">{selectedSupplier.items?.length || 0} поз.</div>
+              </div>
+              <div className="detail-contacts">
+                <span>ИНН {selectedSupplier.inn || "—"}</span>
+                <span>{selectedSupplier.phone || "—"}</span>
+                <span>{selectedSupplier.email || "—"}</span>
+              </div>
+              <div className="item-table">
+                {(selectedSupplier.items || []).map((item) => (
+                  <div className="item-row" key={item.id}>
+                    <div className="item-name">
+                      <strong>{item.name || "Без названия"}</strong>
+                      <span>{[item.service_type, item.category].filter(Boolean).join(" · ") || "Без категории"}</span>
+                    </div>
+                    <div className="item-price">
+                      <strong>{formatMoney(item.unit_price)}</strong>
+                      <span>{item.unit || "—"}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
 function AuthGate({ onSession }) {
   const [mode, setMode] = useState("signin");
   const [email, setEmail] = useState("");
@@ -840,6 +1000,7 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState("brief");
+  const [view, setView] = useState("chat");
   const accessToken = session?.access_token;
   const userEmail = session?.user?.email || "user";
 
@@ -863,6 +1024,7 @@ export default function App() {
   const resetSession = () => {
     setMessages([]);
     setMode("brief");
+    setView("chat");
     fetchJson("/api/chat/reset", { method: "POST" }, accessToken).catch(() => {});
   };
 
@@ -871,6 +1033,7 @@ export default function App() {
     setSession(null);
     setMessages([]);
     setMode("brief");
+    setView("chat");
     setStatus({ ready: false, stage: "idle", row_count: 0, embedded_count: 0 });
   };
 
@@ -899,6 +1062,7 @@ export default function App() {
     setStatus((prev) => ({ ...prev, ready: false, stage: "queued", message: `Файл ${file.name} принят` }));
     setMessages([]);
     setMode("brief");
+    setView("chat");
     try {
       const body = await fetchJson("/api/catalog/upload", { method: "POST", body: form }, accessToken);
       setStatus(body);
@@ -966,10 +1130,19 @@ export default function App() {
     <>
       <AnimatedBg />
       <div className="app">
-        <Sidebar status={status} userEmail={userEmail} onReset={resetSession} onLogout={logout} />
+        <Sidebar
+          status={status}
+          userEmail={userEmail}
+          view={view}
+          onViewChange={setView}
+          onReset={resetSession}
+          onLogout={logout}
+        />
         <main className="main">
           <Header />
-          {status.ready ? (
+          {status.ready && view === "catalog" ? (
+            <CatalogView accessToken={accessToken} />
+          ) : status.ready ? (
             <ChatArea mode={mode} messages={messages} loading={loading} onModeChange={setMode} onSend={handleSend} />
           ) : (
             <UploadGate status={status} onUpload={uploadCatalog} />

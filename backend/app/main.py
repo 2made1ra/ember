@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -9,6 +9,7 @@ from .agent import run_argus_turn
 from .auth import bearer_token, require_user
 from .auth_store import AuthStoreError, DuplicateUserError, get_auth_store
 from .config import get_settings
+from .catalog_store import PostgresCatalogStore
 from .errors import DependencyUnavailableError
 from .ingest import ingest_catalog
 from .lm_studio import LMStudioClient
@@ -111,6 +112,35 @@ def catalog_status(_user: dict = Depends(require_user)) -> dict:
     return get_catalog_status().to_dict()
 
 
+def require_loaded_catalog() -> None:
+    if not get_catalog_status().ready:
+        raise HTTPException(status_code=409, detail="Catalog is not loaded")
+
+
+@app.get("/api/catalog/suppliers")
+def catalog_suppliers(
+    limit: int = Query(default=50, ge=1, le=200),
+    query: str | None = Query(default=None),
+    _user: dict = Depends(require_user),
+) -> dict:
+    require_loaded_catalog()
+    store = PostgresCatalogStore(get_settings())
+    return {"suppliers": store.list_suppliers(limit=limit, query=query)}
+
+
+@app.get("/api/catalog/suppliers/{supplier_id}")
+def catalog_supplier_detail(
+    supplier_id: str,
+    _user: dict = Depends(require_user),
+) -> dict:
+    require_loaded_catalog()
+    store = PostgresCatalogStore(get_settings())
+    supplier = store.get_supplier(supplier_id)
+    if supplier is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return {"supplier": supplier}
+
+
 @app.post("/api/catalog/upload")
 async def upload_catalog(
     background_tasks: BackgroundTasks,
@@ -139,8 +169,7 @@ async def upload_catalog(
 
 @app.post("/api/chat")
 def chat(request: ChatRequest, _user: dict = Depends(require_user)) -> dict:
-    if not get_catalog_status().ready:
-        raise HTTPException(status_code=409, detail="Catalog is not loaded")
+    require_loaded_catalog()
 
     settings = get_settings()
     searcher = PriceSearcher(settings)
@@ -161,8 +190,7 @@ def reset_chat(_user: dict = Depends(require_user)) -> dict:
 
 @app.post("/api/search")
 def semantic_search(request: SearchRequest, _user: dict = Depends(require_user)) -> dict:
-    if not get_catalog_status().ready:
-        raise HTTPException(status_code=409, detail="Catalog is not loaded")
+    require_loaded_catalog()
 
     settings = get_settings()
     searcher = PriceSearcher(settings)

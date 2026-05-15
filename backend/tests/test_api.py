@@ -39,6 +39,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn("authorization", response.json()["detail"].lower())
 
+    def test_catalog_suppliers_requires_auth_token(self):
+        app.dependency_overrides.clear()
+
+        response = self.client.get("/api/catalog/suppliers")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("authorization", response.json()["detail"].lower())
+
     def test_catalog_status_accepts_local_bearer_token(self):
         app.dependency_overrides.clear()
 
@@ -179,6 +187,81 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertIn("catalog", response.json()["detail"].lower())
+
+    def test_catalog_suppliers_requires_loaded_catalog(self):
+        response = self.client.get("/api/catalog/suppliers")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("catalog", response.json()["detail"].lower())
+
+    def test_catalog_supplier_detail_requires_loaded_catalog(self):
+        response = self.client.get("/api/catalog/suppliers/7704856280")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("catalog", response.json()["detail"].lower())
+
+    def test_catalog_suppliers_returns_grouped_store_rows(self):
+        store = Mock()
+        store.list_suppliers.return_value = [
+            {
+                "id": "7704856280",
+                "name": "ООО Питание",
+                "inn": "7704856280",
+                "city": "Москва",
+                "status": "Активен",
+                "item_count": 2,
+                "service_types": ["catering"],
+                "min_price": 450.0,
+            }
+        ]
+        set_catalog_status(ready=True, stage="ready", row_count=1565)
+
+        with patch("app.main.PostgresCatalogStore", return_value=store):
+            response = self.client.get("/api/catalog/suppliers?limit=20&query=пит")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["suppliers"][0]["id"], "7704856280")
+        store.list_suppliers.assert_called_once_with(limit=20, query="пит")
+
+    def test_catalog_supplier_detail_returns_items(self):
+        store = Mock()
+        store.get_supplier.return_value = {
+            "id": "7704856280",
+            "name": "ООО Питание",
+            "inn": "7704856280",
+            "city": "Москва",
+            "phone": "+7",
+            "email": "sales@example.test",
+            "status": "Активен",
+            "items": [
+                {
+                    "id": "item-1",
+                    "name": "Кофе-брейк",
+                    "category": "Питание",
+                    "unit": "чел",
+                    "unit_price": 450.0,
+                    "service_type": "catering",
+                }
+            ],
+        }
+        set_catalog_status(ready=True, stage="ready", row_count=1565)
+
+        with patch("app.main.PostgresCatalogStore", return_value=store):
+            response = self.client.get("/api/catalog/suppliers/7704856280")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["supplier"]["items"][0]["id"], "item-1")
+        store.get_supplier.assert_called_once_with("7704856280")
+
+    def test_catalog_supplier_detail_returns_404_for_unknown_supplier(self):
+        store = Mock()
+        store.get_supplier.return_value = None
+        set_catalog_status(ready=True, stage="ready", row_count=1565)
+
+        with patch("app.main.PostgresCatalogStore", return_value=store):
+            response = self.client.get("/api/catalog/suppliers/missing")
+
+        self.assertEqual(response.status_code, 404)
 
     def test_search_returns_semantic_results(self):
         class FakeSearcher:
