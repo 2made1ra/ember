@@ -108,6 +108,25 @@ SEARCH_STOP_WORDS = (
     "цену",
 )
 
+SELECTION_WORDS = (
+    "выбери",
+    "выбрать",
+    "выбираю",
+    "добавь",
+    "добавить",
+    "оставь",
+    "оставить",
+    "берем",
+    "берём",
+    "зафиксируй",
+    "select",
+)
+
+SELECTION_ID_PATTERN = re.compile(
+    r"(?:\b(?:id|ид)\s*[:#№-]?\s*|#)([0-9a-zа-яё_-]+)",
+    re.IGNORECASE,
+)
+
 CATEGORY_TERMS = {
     "звук": ("микроф", "радиомикроф", "звук", "акустик", "микшер"),
     "свет": ("свет", "прожектор", "beam", "wash", "led"),
@@ -233,8 +252,32 @@ def _search_decision(message: str, brief_state: BriefState, confidence: float = 
     )
 
 
+def _looks_like_selection(message: str) -> bool:
+    lowered = message.lower().replace("ё", "е")
+    return any(word in lowered for word in SELECTION_WORDS) and bool(
+        SELECTION_ID_PATTERN.search(message)
+    )
+
+
+def _selection_decision() -> RouterDecision:
+    return RouterDecision(
+        interface_mode="brief_workspace",
+        intent="selection",
+        workflow_stage="search_results_shown",
+        confidence=0.8,
+        reason_codes=["explicit_selection"],
+        brief_update={},
+        search_requests=[],
+        tool_intents=["select_item"],
+        missing_fields=[],
+        clarification_questions=[],
+    )
+
+
 def heuristic_route(message: str, brief_state: BriefState, ui_mode: str = "brief") -> RouterDecision:
     lowered = message.lower().replace("ё", "е")
+    if _looks_like_selection(message):
+        return _selection_decision()
     if ui_mode == "search" or any(word in lowered for word in SEARCH_WORDS):
         return _search_decision(message, brief_state)
 
@@ -254,7 +297,11 @@ def heuristic_route(message: str, brief_state: BriefState, ui_mode: str = "brief
 
 def should_use_llm_router(message: str, ui_mode: str = "brief") -> bool:
     lowered = message.lower().replace("ё", "е")
-    return ui_mode == "search" or any(word in lowered for word in SEARCH_WORDS)
+    return (
+        ui_mode == "search"
+        or any(word in lowered for word in SEARCH_WORDS)
+        or _looks_like_selection(message)
+    )
 
 
 def route_message(

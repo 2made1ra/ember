@@ -305,6 +305,15 @@ class PostgresCatalogStoreSearchTests(unittest.TestCase):
         self.assertEqual(len(first_schema_calls), 1)
         self.assertEqual(second_schema_calls, [])
 
+    def test_search_wraps_schema_failures_as_dependency_unavailable(self):
+        store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+
+        with patch.object(store, "ensure_schema", side_effect=RuntimeError("schema failed")):
+            with self.assertRaises(DependencyUnavailableError) as ctx:
+                store.search([0.1, 0.2, 0.3], limit=1)
+
+        self.assertIn("поиск в pgvector", str(ctx.exception))
+
 
 class PostgresCatalogStoreSupplierTests(unittest.TestCase):
     def setUp(self):

@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from .brief import BriefState, ChatClient, Searcher, format_conversation_history, run_brief_turn
+from .brief import (
+    BriefState,
+    ChatClient,
+    Searcher,
+    budget_lines_from_results,
+    estimate_budget,
+    format_conversation_history,
+    run_brief_turn,
+)
 from .prompts import COMPOSER_SYSTEM_PROMPT
 from .router import RouterDecision, RouterSearchRequest, route_message
 from .semantic_agent import format_search_message
@@ -11,6 +20,145 @@ from .semantic_agent import format_search_message
 def _payload(result: dict[str, Any]) -> dict[str, Any]:
     payload = result.get("payload")
     return payload if isinstance(payload, dict) else result
+
+
+def _candidate_item_id(item: dict[str, Any]) -> str:
+    payload = _payload(item)
+    return str(payload.get("id") or item.get("id") or "").strip()
+
+
+def _selection_ids_from_message(message: str) -> list[str]:
+    ids = re.findall(
+        r"(?:\b(?:id|ид)\s*[:#№-]?\s*|#)([0-9a-zа-яё_-]+)",
+        message,
+        flags=re.IGNORECASE,
+    )
+    return [item_id.strip() for item_id in ids if item_id.strip()]
+
+
+def _selection_ids_from_route(route: RouterDecision) -> list[str]:
+    brief_update = route.brief_update if isinstance(route.brief_update, dict) else {}
+    raw_values: list[Any] = []
+    for key in ("item_id", "selected_item_id"):
+        raw_values.append(brief_update.get(key))
+    for key in ("item_ids", "selected_item_ids"):
+        value = brief_update.get(key)
+        if isinstance(value, list):
+            raw_values.extend(value)
+        else:
+            raw_values.append(value)
+    return [str(value).strip() for value in raw_values if str(value or "").strip()]
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _select_visible_items(
+    *,
+    state: BriefState,
+    message: str,
+    route: RouterDecision,
+    visible_candidates: list[dict[str, Any]],
+) -> list[str]:
+    if route.intent != "selection" and "select_item" not in route.tool_intents:
+        return []
+
+    requested_ids = _ordered_unique(
+        _selection_ids_from_route(route) + _selection_ids_from_message(message)
+    )
+    if not requested_ids:
+        return []
+
+    selected_ids: list[str] = []
+    visible_by_id = {
+        item_id: item
+        for item in visible_candidates
+        if (item_id := _candidate_item_id(item))
+    }
+    persisted_ids = {
+        item_id
+        for need in state.service_needs.values()
+        for item in need.candidate_items
+        if (item_id := _candidate_item_id(item))
+    }
+
+    for item_id in requested_ids:
+        matched_persisted_candidate = False
+        for need in state.service_needs.values():
+            if item_id not in {_candidate_item_id(item) for item in need.candidate_items}:
+                continue
+            matched_persisted_candidate = True
+            if item_id not in need.selected_item_ids:
+                need.selected_item_ids.append(item_id)
+            if item_id not in selected_ids:
+                selected_ids.append(item_id)
+
+        if matched_persisted_candidate or item_id not in visible_by_id or item_id in persisted_ids:
+            continue
+
+        if not any(_candidate_item_id(item) == item_id for item in state.selected_price_items):
+            state.selected_price_items.append(visible_by_id[item_id])
+        selected_ids.append(item_id)
+
+    return selected_ids
+
+
+def _items_for_ids(
+    item_ids: list[str],
+    visible_candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    requested_ids = set(item_ids)
+    items: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in visible_candidates:
+        item_id = _candidate_item_id(item)
+        if item_id not in requested_ids or item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+        items.append(item)
+    return items
+
+
+def _format_money(value: Any) -> str:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "цена не указана"
+    if amount.is_integer():
+        return f"{int(amount):,}".replace(",", " ") + " ₽"
+    return f"{amount:,.2f}".replace(",", " ").replace(".", ",") + " ₽"
+
+
+def _compose_selection_answer(selected_ids: list[str], budget: dict[str, Any]) -> str:
+    if not selected_ids:
+        return (
+            "Не нашел указанные ID среди видимых кандидатов. "
+            "Выберите ID из короткого списка, "
+            "который уже показан в брифе."
+        )
+
+    parts = [
+        "Выбрал позиции: "
+        + ", ".join(f"ID {item_id}" for item_id in selected_ids)
+        + "."
+    ]
+    if budget["lines"]:
+        total = _format_money(budget["total"])
+        parts.append(f"\nОриентировочная смета по выбранным позициям: {total}")
+        for line in budget["lines"]:
+            parts.append(
+                f"- {line['name']}: {_format_money(line['unit_price'])} × "
+                f"{line['quantity']:g} = {_format_money(line['subtotal'])}"
+            )
+    return "\n".join(parts)
 
 
 def _search_filters(request: RouterSearchRequest) -> dict[str, Any]:
@@ -119,6 +267,27 @@ def run_argus_turn(
         chat_client=chat_client,
         visible_candidates=visible_candidates,
     )
+    selected_ids = _select_visible_items(
+        state=state,
+        message=message,
+        route=route,
+        visible_candidates=visible_candidates,
+    )
+
+    if route.intent == "selection" or "select_item" in route.tool_intents:
+        selected_items = _items_for_ids(selected_ids, visible_candidates)
+        budget = estimate_budget(budget_lines_from_results(selected_items, state))
+        answer = _compose_selection_answer(selected_ids, budget)
+        state.conversation_history.append({"role": "user", "content": message})
+        state.conversation_history.append({"role": "assistant", "content": answer})
+        return {
+            "message": answer,
+            "brief_state": state.to_dict(),
+            "found_items": selected_items[:10],
+            "items": selected_items[:10],
+            "budget": budget,
+            "route": route.model_dump(),
+        }
 
     if route.interface_mode == "chat_search" and route.search_requests:
         found_items = _search_catalog_from_route(route, searcher)

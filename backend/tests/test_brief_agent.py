@@ -1,6 +1,7 @@
 import unittest
 from importlib import import_module, util
 
+from app.agent import run_argus_turn
 from app.brief import BriefState, estimate_budget, run_brief_turn
 
 
@@ -285,6 +286,55 @@ class BriefAgentTests(unittest.TestCase):
             ["c1"],
         )
         self.assertEqual(response["budget"]["total"], 50000.0)
+
+    def test_selection_route_selects_visible_candidate_and_next_budget_uses_it(self):
+        candidate = self._catalog_item(
+            "557",
+            "Организация кофе-брейка",
+            "Комбинат питания",
+            "catering",
+            unit_price=500,
+            quantity_kind="per_guest",
+        )
+        state = BriefState(
+            event_type="конференция",
+            city="Москва",
+            guests_count=100,
+            format="офлайн",
+            budget_tier="стандарт",
+        )
+        state.service_needs["catering"].status = "needed"
+        state.service_needs["catering"].candidate_items = [candidate]
+        searcher = RecordingSearcher({"catering": []})
+
+        selection = run_argus_turn(
+            state=state,
+            message="Выбери ID 557",
+            searcher=searcher,
+            chat_client=None,
+            ui_mode="brief",
+        )
+        self.assertEqual(searcher.calls, [])
+
+        budget_response = run_argus_turn(
+            state=state,
+            message="Собери смету по выбранным позициям",
+            searcher=searcher,
+            chat_client=None,
+            ui_mode="brief",
+        )
+
+        self.assertEqual(selection["route"]["intent"], "selection")
+        self.assertEqual(
+            selection["brief_state"]["service_needs"]["catering"]["selected_item_ids"],
+            ["557"],
+        )
+        self.assertEqual(
+            [line["item_id"] for line in budget_response["budget"]["lines"]],
+            ["557"],
+        )
+        self.assertEqual(budget_response["budget"]["total"], 50000.0)
+        self.assertIn("Организация кофе-брейка", budget_response["message"])
 
     def test_budget_uses_variable_and_fixed_quantity_rules(self):
         result = estimate_budget(

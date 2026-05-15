@@ -144,7 +144,6 @@ class PostgresCatalogStore:
         limit: int = 10,
         filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        self.ensure_schema()
         vector = _vector_literal(query_vector)
         where: list[str] = []
         params: list[Any] = [vector]
@@ -162,6 +161,7 @@ class PostgresCatalogStore:
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         params.extend([vector, limit])
         try:
+            self.ensure_schema()
             with self._connect() as conn:
                 rows = conn.execute(
                     f"""

@@ -105,6 +105,18 @@ class RouterTests(unittest.TestCase):
         )
         self.assertEqual(decision.search_requests[0].filters.unit_price_max, 5000)
 
+    def test_heuristic_route_detects_explicit_item_selection(self):
+        decision = heuristic_route(
+            "Выбери ID 557",
+            brief_state=BriefState(),
+            ui_mode="brief",
+        )
+
+        self.assertEqual(decision.interface_mode, "brief_workspace")
+        self.assertEqual(decision.intent, "selection")
+        self.assertEqual(decision.tool_intents, ["select_item"])
+        self.assertEqual(decision.search_requests, [])
+
 
 if __name__ == "__main__":
     unittest.main()
