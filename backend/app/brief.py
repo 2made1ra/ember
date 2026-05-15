@@ -412,7 +412,7 @@ def estimate_budget(lines: list[dict[str, Any]]) -> dict[str, Any]:
 
 def budget_lines_from_results(results: list[dict[str, Any]], state: BriefState) -> list[dict[str, Any]]:
     lines = []
-    used_service_types: set[str] = set()
+    used_item_ids: set[str] = set()
     selected_ids = {
         str(item_id)
         for need in state.service_needs.values()
@@ -426,15 +426,20 @@ def budget_lines_from_results(results: list[dict[str, Any]], state: BriefState) 
     if not selected_ids:
         return lines
 
-    for result in results:
+    source_items = list(results)
+    source_items.extend(state.selected_price_items)
+    for need in state.service_needs.values():
+        source_items.extend(need.candidate_items)
+
+    for result in source_items:
         payload = result.get("payload", result)
         item_id = str(payload.get("id", result.get("id")) or "")
         if item_id not in selected_ids:
             continue
-        service_type = payload.get("service_type")
-        if service_type in used_service_types:
+        if item_id in used_item_ids:
             continue
-        used_service_types.add(service_type)
+        used_item_ids.add(item_id)
+        service_type = payload.get("service_type")
         lines.append(
             {
                 "item_id": payload.get("id", result.get("id")),
