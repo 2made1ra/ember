@@ -71,6 +71,14 @@ SERVICE_QUERIES = {
     "security": "охрана безопасность мероприятия",
 }
 
+BUDGET_CURRENCY = "RUB"
+BUDGET_APPROXIMATION_RATIO = 0.2
+BUDGET_TIERS = {
+    "эконом": (None, 500_000.0),
+    "стандарт": (500_000.0, 1_500_000.0),
+    "премиум": (1_500_000.0, None),
+}
+
 EVENT_TYPES = {
     "конференц": "конференция",
     "форум": "форум",
@@ -132,6 +140,9 @@ class BriefState:
     guests_count: int | None = None
     format: str | None = None
     budget_limit: float | None = None
+    budget_min: float | None = None
+    budget_max: float | None = None
+    budget_currency: str = BUDGET_CURRENCY
     budget_tier: str | None = None
     concept: str | None = None
     audience: str | None = None
@@ -156,6 +167,9 @@ class BriefState:
             "guests_count": self.guests_count,
             "format": self.format,
             "budget_limit": self.budget_limit,
+            "budget_min": self.budget_min,
+            "budget_max": self.budget_max,
+            "budget_currency": self.budget_currency,
             "budget_tier": self.budget_tier,
             "concept": self.concept,
             "audience": self.audience,
@@ -223,6 +237,87 @@ def _extract_concept(message: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+AMOUNT_PATTERN = r"(\d[\d\s]*(?:[.,]\d+)?)\s*(млн|миллион(?:а|ов)?|тыс\.?|тысяч[аи]?|руб(?:лей|ля)?|₽|р\.?)?"
+
+
+def _parse_budget_amount(raw_value: str, raw_unit: str | None) -> float:
+    value = float(raw_value.replace(" ", "").replace(",", "."))
+    unit = (raw_unit or "").replace(".", "")
+    if unit.startswith("млн") or unit.startswith("миллион"):
+        return value * 1_000_000
+    if unit.startswith("тыс") or unit.startswith("тысяч"):
+        return value * 1_000
+    return value
+
+
+def _extract_budget_range(lowered: str) -> tuple[float | None, float | None] | None:
+    approximate_match = re.search(
+        rf"(?:около|примерно|ориентировочно|порядка|~)\s+{AMOUNT_PATTERN}",
+        lowered,
+    )
+    if approximate_match:
+        amount = _parse_budget_amount(approximate_match.group(1), approximate_match.group(2))
+        return (
+            round(amount * (1 - BUDGET_APPROXIMATION_RATIO), 2),
+            round(amount * (1 + BUDGET_APPROXIMATION_RATIO), 2),
+        )
+
+    range_match = re.search(
+        rf"(?:от\s+)?{AMOUNT_PATTERN}\s*(?:-|—|–|до)\s*{AMOUNT_PATTERN}",
+        lowered,
+    )
+    if range_match:
+        min_amount = _parse_budget_amount(range_match.group(1), range_match.group(2))
+        max_amount = _parse_budget_amount(range_match.group(3), range_match.group(4))
+        return (min(min_amount, max_amount), max(min_amount, max_amount))
+
+    return None
+
+
+def _extract_budget_limit(lowered: str) -> float | None:
+    limit_match = re.search(rf"(?:до|не более|лимит)\s+{AMOUNT_PATTERN}", lowered)
+    if limit_match:
+        return _parse_budget_amount(limit_match.group(1), limit_match.group(2))
+
+    amount_match = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:млн|миллион)", lowered)
+    if amount_match:
+        return float(amount_match.group(1).replace(",", ".")) * 1_000_000
+
+    amount_match = re.search(r"(\d[\d\s]{4,})\s*(?:руб|₽|р)", lowered)
+    if amount_match:
+        return float(amount_match.group(1).replace(" ", ""))
+
+    return None
+
+
+def _format_budget_amount(value: float | None) -> str:
+    if value is None:
+        return ""
+    amount = int(value) if float(value).is_integer() else value
+    if isinstance(amount, int):
+        return f"{amount:,}".replace(",", " ")
+    return f"{amount:,.2f}".replace(",", " ").replace(".", ",")
+
+
+def _format_budget_range(min_amount: float | None, max_amount: float | None) -> str:
+    if min_amount is not None and max_amount is not None:
+        return f"{_format_budget_amount(min_amount)}-{_format_budget_amount(max_amount)} ₽"
+    if max_amount is not None:
+        return f"до {_format_budget_amount(max_amount)} ₽"
+    if min_amount is not None:
+        return f"от {_format_budget_amount(min_amount)} ₽"
+    return ""
+
+
+def _has_budget_context(state: BriefState) -> bool:
+    return bool(
+        state.budget_limit
+        or state.budget_tier
+        or state.budget_min is not None
+        or state.budget_max is not None
+    )
+
+
 def update_brief_state(state: BriefState, message: str) -> BriefState:
     lowered = message.lower().replace("ё", "е")
 
@@ -250,17 +345,26 @@ def update_brief_state(state: BriefState, message: str) -> BriefState:
     if duration_days:
         state.duration_days = duration_days
 
-    budget_match = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:млн|миллион)", lowered)
-    if budget_match:
-        state.budget_limit = float(budget_match.group(1).replace(",", ".")) * 1_000_000
-    else:
-        budget_match = re.search(r"(\d[\d\s]{4,})\s*(?:руб|₽|р)", lowered)
-        if budget_match:
-            state.budget_limit = float(budget_match.group(1).replace(" ", ""))
-
     for tier in ["эконом", "стандарт", "премиум"]:
         if tier in lowered:
             state.budget_tier = tier
+            state.budget_min, state.budget_max = BUDGET_TIERS[tier]
+            state.budget_currency = BUDGET_CURRENCY
+
+    budget_range = _extract_budget_range(lowered)
+    if budget_range:
+        state.budget_min, state.budget_max = budget_range
+        state.budget_limit = None
+        state.budget_tier = None
+        state.budget_currency = BUDGET_CURRENCY
+    else:
+        budget_limit = _extract_budget_limit(lowered)
+        if budget_limit:
+            state.budget_limit = budget_limit
+            state.budget_min = None
+            state.budget_max = None
+            state.budget_tier = None
+            state.budget_currency = BUDGET_CURRENCY
 
     goal = _extract_goal(message)
     if goal:
@@ -299,10 +403,22 @@ def build_confirmed_requirements(state: BriefState) -> list[str]:
         requirements.append(f"Участников: {state.guests_count}")
     if state.format:
         requirements.append(f"Формат: {state.format}")
-    if state.budget_limit:
+    if state.budget_tier:
+        tier_min, tier_max = BUDGET_TIERS.get(
+            state.budget_tier,
+            (state.budget_min, state.budget_max),
+        )
+        tier_range = _format_budget_range(
+            state.budget_min if state.budget_min is not None else tier_min,
+            state.budget_max if state.budget_max is not None else tier_max,
+        )
+        requirements.append(f"Бюджетный сегмент: {state.budget_tier} ({tier_range})")
+    elif state.budget_min is not None or state.budget_max is not None:
+        requirements.append(
+            f"Бюджетный диапазон: {_format_budget_range(state.budget_min, state.budget_max)}"
+        )
+    elif state.budget_limit:
         requirements.append(f"Бюджетный лимит: {state.budget_limit:,.0f} ₽".replace(",", " "))
-    elif state.budget_tier:
-        requirements.append(f"Бюджетный уровень: {state.budget_tier}")
     for service_type, need in state.service_needs.items():
         if need.status == "needed":
             requirements.append(f"Нужен блок: {SERVICE_LABELS[service_type]}")
@@ -317,8 +433,12 @@ def blocking_questions(state: BriefState) -> list[str]:
         questions.append("В каком городе пройдет мероприятие?")
     if not state.guests_count:
         questions.append("Сколько участников ожидается?")
-    if not state.budget_limit and not state.budget_tier:
-        questions.append("Есть ориентир по бюджету: лимит или уровень эконом/стандарт/премиум?")
+    if not _has_budget_context(state):
+        questions.append(
+            "Какой бюджетный ориентир использовать: эконом до 500 000 ₽, "
+            "стандарт 500 000-1 500 000 ₽, премиум от 1 500 000 ₽, "
+            "или свой диапазон / примерно: например, около 700 000 ₽?"
+        )
     if not questions and not needed_service_types(state):
         questions.append(
             "Какие блоки услуг нужны: площадка, питание, оборудование, персонал, транспорт, проживание, брендинг?"

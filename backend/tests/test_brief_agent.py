@@ -96,6 +96,54 @@ class BriefAgentTests(unittest.TestCase):
         self.assertIn("Сколько участников", response["message"])
         self.assertLessEqual(len(response["brief_state"]["open_questions"]), 4)
 
+    def test_budget_question_explains_tiers_and_custom_range(self):
+        response = run_brief_turn(
+            state=BriefState(event_type="конференция", city="Екатеринбург", guests_count=50),
+            message="Нужно собрать бриф конференции",
+            searcher=RecordingSearcher(),
+            chat_client=None,
+        )
+
+        self.assertIn("эконом до 500 000 ₽", response["message"])
+        self.assertIn("стандарт 500 000-1 500 000 ₽", response["message"])
+        self.assertIn("премиум от 1 500 000 ₽", response["message"])
+        self.assertIn("свой диапазон", response["message"])
+        self.assertIn("около 700 000 ₽", response["message"])
+
+    def test_budget_tier_sets_explained_range(self):
+        response = run_brief_turn(
+            state=BriefState(),
+            message=(
+                "Планируем конференцию в Екатеринбурге на 50 человек. "
+                "Бюджет стандарт, нужно питание."
+            ),
+            searcher=RecordingSearcher(),
+            chat_client=None,
+        )
+
+        brief_state = response["brief_state"]
+        self.assertEqual(brief_state["budget_tier"], "стандарт")
+        self.assertEqual(brief_state["budget_min"], 500000.0)
+        self.assertEqual(brief_state["budget_max"], 1500000.0)
+        self.assertIn("Бюджетный сегмент: стандарт (500 000-1 500 000 ₽)", response["message"])
+
+    def test_approximate_budget_is_saved_as_range(self):
+        response = run_brief_turn(
+            state=BriefState(),
+            message=(
+                "Планируем конференцию в Екатеринбурге на 50 человек. "
+                "Бюджет около 700 тыс рублей, нужно питание."
+            ),
+            searcher=RecordingSearcher(),
+            chat_client=None,
+        )
+
+        brief_state = response["brief_state"]
+        self.assertIsNone(brief_state["budget_limit"])
+        self.assertEqual(brief_state["budget_min"], 560000.0)
+        self.assertEqual(brief_state["budget_max"], 840000.0)
+        self.assertIn("Бюджетный диапазон: 560 000-840 000 ₽", response["message"])
+
     def test_brief_questions_do_not_ask_for_event_date(self):
         searcher = RecordingSearcher(
             {"venue": [self._catalog_item("v1", "Конференц-зал", "Venue Team", "venue")]}
