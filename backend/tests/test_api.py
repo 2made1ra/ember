@@ -121,6 +121,30 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn("invalid", response.json()["detail"].lower())
 
+    def test_auth_signin_allows_short_passwords(self):
+        app.dependency_overrides.clear()
+        store = Mock()
+        store.authenticate.return_value = {
+            "id": "user-1",
+            "email": "demo@example.com",
+            "app_metadata": {"role": "user"},
+        }
+        store.create_session.return_value = {
+            "access_token": "local-token",
+            "token_type": "bearer",
+            "expires_in": 3600,
+            "user": store.authenticate.return_value,
+        }
+
+        with patch("app.main.get_auth_store", return_value=store):
+            response = self.client.post(
+                "/api/auth/signin",
+                json={"email": "demo@example.com", "password": "1234"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        store.authenticate.assert_called_once_with("demo@example.com", "1234")
+
     def test_auth_session_returns_current_user(self):
         app.dependency_overrides.clear()
         store = Mock()

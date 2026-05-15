@@ -49,7 +49,7 @@ class SearchRequest(BaseModel):
 
 class AuthRequest(BaseModel):
     email: str = Field(min_length=3)
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=1)
 
 
 @app.get("/api/health")

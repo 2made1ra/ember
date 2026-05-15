@@ -7,6 +7,7 @@ const P = {
   edit: ["M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7", "M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"],
   files: ["M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z", "M13 2v7h7"],
   brief: ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z", "M14 2v6h6", "M16 13H8", "M16 17H8", "M10 9H8"],
+  catalog: ["M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3H3V5z", "M3 8v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8", "M7 12h10", "M7 16h10"],
   search: ["M21 21l-4.35-4.35", "M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z"],
   up: ["M12 19V5", "M5 12l7-7 7 7"],
   upload: ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M17 8l-5-5-5 5", "M12 3v12"],
@@ -15,8 +16,6 @@ const P = {
   export: ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M7 10l5 5 5-5", "M12 15V3"],
   logout: ["M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", "M16 17l5-5-5-5", "M21 12H9"],
   collapse: "M15 18l-6-6 6-6",
-  plug: ["M12 2v6m4-2h6m0 0v2a2 2 0 0 1-2 2h-2m-8 0H4a2 2 0 0 1-2-2V8m0-4h6M6 18v3m6 0v3m6-3v3M6 18h12", "M9 22h6"],
-  clock: ["M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z", "M12 6v6l4 2"],
 };
 
 const PROMPT_GUIDE_ITEMS = [
@@ -32,6 +31,25 @@ const PROMPT_GUIDE_ITEMS = [
     title: "Уточнение ответа",
     text: "Попроси сократить, разложить по шагам или добавить риски и следующие действия.",
   },
+];
+
+const SIDEBAR_FAVORITES = [
+  { title: "Каталог поставщиков" },
+  { title: "Корпоратив на 120 гостей" },
+  { title: "Проверка ИНН" },
+  { title: "Финальный бриф" },
+];
+
+const SIDEBAR_RECENTS = [
+  "Найди площадку на 200 гостей — центр",
+  "Кейтеринг в бюджет 500К на кофе-брейк",
+  "Список поставщиков звука и света",
+  "Сравни 3 кейтеринга из каталога",
+  "Бриф: конференция на 300 человек",
+  "Радиомикрофоны в Екатеринбурге",
+  "ТЗ для фотографа мероприятий",
+  "Проверь поставщика ИНН 6671",
+  "Оборудование для презентации",
 ];
 
 function Icon({ d, size = 16, strokeWidth = 1.8 }) {
@@ -223,7 +241,7 @@ function AnimatedBg() {
   );
 }
 
-function ArgusOrb({ loading = false }) {
+function ArgusOrb({ loading = false, particles = true, compact = false }) {
   const canvasRef = useRef(null);
   const rafRef = useRef(null);
   const startRef = useRef(null);
@@ -241,9 +259,10 @@ function ArgusOrb({ loading = false }) {
     const blobRadius = width * 0.2;
     const particleRadius = width * 0.4;
     const controlPoints = 12;
-    const particles = [];
+    const particleItems = [];
+    const particleCount = particles ? 300 : 0;
 
-    for (let index = 0; index < 300; index += 1) {
+    for (let index = 0; index < particleCount; index += 1) {
       const u = Math.random();
       let radius;
       if (u < 0.18) radius = Math.pow(Math.random(), 0.6) * 0.38;
@@ -253,7 +272,7 @@ function ArgusOrb({ loading = false }) {
 
       const phi = Math.random() * Math.PI * 2;
       const theta = Math.acos(Math.random() * 2 - 1);
-      particles.push({
+      particleItems.push({
         bx: radius * Math.sin(theta) * Math.cos(phi),
         by: radius * Math.sin(theta) * Math.sin(phi),
         bz: radius * Math.cos(theta),
@@ -339,13 +358,14 @@ function ArgusOrb({ loading = false }) {
       if (!startRef.current) startRef.current = timestamp;
       const time = (timestamp - startRef.current) * 0.001;
       const active = loadingRef.current;
+      const showNebula = particles || active;
       ctx.clearRect(0, 0, width, height);
 
       const floatY = Math.sin(time * 0.75) * 7;
       const rotationSpeed = active ? 0.44 : 0.13;
       const cos = Math.cos(time * rotationSpeed);
       const sin = Math.sin(time * rotationSpeed);
-      const transformed = particles.map((particle) => {
+      const transformed = particleItems.map((particle) => {
         const wobble = Math.sin(time * particle.speed + particle.phase) * (active ? 0.055 : 0.022);
         const rx = particle.bx * (1 + wobble) * cos + particle.bz * sin;
         const ry = particle.by * (1 + wobble);
@@ -365,15 +385,17 @@ function ArgusOrb({ loading = false }) {
         drawParticle(particle.x, particle.y, particle.size, particle.radius, particle.depth);
       });
 
-      const nebula = ctx.createRadialGradient(cx, cy + floatY, 0, cx, cy + floatY, blobRadius * 3);
-      nebula.addColorStop(0, "rgba(188,186,225,0.26)");
-      nebula.addColorStop(0.4, "rgba(158,156,200,0.10)");
-      nebula.addColorStop(0.75, "rgba(128,126,172,0.04)");
-      nebula.addColorStop(1, "rgba(128,126,172,0)");
-      ctx.fillStyle = nebula;
-      ctx.beginPath();
-      ctx.arc(cx, cy + floatY, blobRadius * 3, 0, Math.PI * 2);
-      ctx.fill();
+      if (showNebula) {
+        const nebula = ctx.createRadialGradient(cx, cy + floatY, 0, cx, cy + floatY, blobRadius * 3);
+        nebula.addColorStop(0, "rgba(188,186,225,0.26)");
+        nebula.addColorStop(0.4, "rgba(158,156,200,0.10)");
+        nebula.addColorStop(0.75, "rgba(128,126,172,0.04)");
+        nebula.addColorStop(1, "rgba(128,126,172,0)");
+        ctx.fillStyle = nebula;
+        ctx.beginPath();
+        ctx.arc(cx, cy + floatY, blobRadius * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       ctx.save();
       ctx.translate(0, floatY);
@@ -436,18 +458,18 @@ function ArgusOrb({ loading = false }) {
     return () => {
       if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
     };
-  }, []);
+  }, [particles]);
 
   return (
-    <div className="orb-wrap" aria-hidden="true">
+    <div className={`orb-wrap ${compact ? "orb-wrap-compact" : ""}`} aria-hidden="true">
       <canvas ref={canvasRef} className="orb-canvas" width={260} height={260} />
       {loading && <div className="orb-dots"><span /><span /><span /></div>}
     </div>
   );
 }
 
-function Sidebar({ status, userEmail, view, onViewChange, onReset, onLogout }) {
-  const initials = (userEmail || "ARGUS")
+function Sidebar({ catalogReady, userEmail, view, onViewChange, onReset, onLogout }) {
+  const initials = (userEmail || "Agency Manager")
     .split("@")[0]
     .slice(0, 2)
     .toUpperCase();
@@ -462,34 +484,36 @@ function Sidebar({ status, userEmail, view, onViewChange, onReset, onLogout }) {
       <div className="s-head">
         <div className="brand">
           <div className="brand-mark"><Icon d={P.eye} size={15} strokeWidth={2.2} /></div>
-          <span className="brand-name">ARGUS</span>
         </div>
-        <button className="icon-btn" type="button" aria-label="Свернуть">
+        <label
+          className="icon-btn sidebar-toggle"
+          htmlFor="sidebar-collapse-toggle"
+          title="Свернуть"
+        >
           <Icon d={P.collapse} size={16} />
-        </button>
+        </label>
       </div>
 
       <nav className="s-nav">
         <button className={`nav-link ${view === "chat" ? "active" : ""}`} onClick={startNewSession}>
-          <span className="nav-icon"><Icon d={P.edit} size={15} /></span>
+          <span className="nav-icon"><Icon d={P.edit} size={16} /></span>
           <span className="nav-label">Новая сессия</span>
         </button>
         <button className="nav-link" type="button" disabled>
-          <span className="nav-icon"><Icon d={P.search} size={15} /></span>
+          <span className="nav-icon"><Icon d={P.search} size={16} /></span>
           <span className="nav-label">Поиск</span>
         </button>
         <button
           className={`nav-link ${view === "catalog" ? "active" : ""}`}
           type="button"
-          disabled={!status.ready}
+          disabled={!catalogReady}
           onClick={() => onViewChange("catalog")}
         >
-          <span className="nav-icon"><Icon d={P.plug} size={15} /></span>
+          <span className="nav-icon"><Icon d={P.catalog} size={16} /></span>
           <span className="nav-label">Каталог</span>
-          <span className={`status-dot ${status.ready ? "status-ok" : ""}`} />
         </button>
         <button className="nav-link" type="button" disabled>
-          <span className="nav-icon"><Icon d={P.clock} size={15} /></span>
+          <span className="nav-icon"><Icon d={P.files} size={16} /></span>
           <span className="nav-label">Документы</span>
         </button>
       </nav>
@@ -497,32 +521,28 @@ function Sidebar({ status, userEmail, view, onViewChange, onReset, onLogout }) {
       <div className="s-divider" />
 
       <div className="s-scroll">
-        <div className="s-pinned-label">СОСТОЯНИЕ</div>
-        <div className="catalog-mini">
-          <div className="catalog-mini-row">
-            <span>Статус</span>
-            <strong>{status.stage}</strong>
-          </div>
-          <div className="catalog-mini-row">
-            <span>Строк</span>
-            <strong>{status.row_count || 0}</strong>
-          </div>
-          <div className="catalog-mini-row">
-            <span>Векторов</span>
-            <strong>{status.embedded_count || 0}</strong>
-          </div>
-          <div className="catalog-mini-row">
-            <span>Размерность</span>
-            <strong>{status.vector_size || "—"}</strong>
-          </div>
-        </div>
+        <section className="s-shortcuts" aria-label="Избранное">
+          <div className="s-pinned-label">ИЗБРАННОЕ</div>
+          {SIDEBAR_FAVORITES.map((item) => (
+            <button className="s-shortcut" type="button" key={item.title}>
+              <span className="shortcut-title">{item.title}</span>
+            </button>
+          ))}
+        </section>
+
+        <section className="s-recents" aria-label="Недавние запросы">
+          <div className="s-pinned-label">НЕДАВНИЕ ЗАПРОСЫ</div>
+          {SIDEBAR_RECENTS.map((item) => (
+            <button className="recent-link" type="button" key={item}>{item}</button>
+          ))}
+        </section>
       </div>
 
       <div className="s-user">
         <div className="u-avatar">{initials}</div>
         <div className="u-info">
-          <div className="u-name">ARGUS MVP</div>
-          <div className="u-email">{userEmail}</div>
+          <div className="u-name">Agency Manager</div>
+          <div className="u-email">{userEmail || "argus@event-agency.local"}</div>
         </div>
         <button className="logout-btn" type="button" onClick={onLogout} aria-label="Выйти">
           <Icon d={P.logout} size={15} />
@@ -552,7 +572,7 @@ function Header({ status, view, onViewChange }) {
             type="button"
             onClick={() => onViewChange("catalog")}
           >
-            <Icon d={P.plug} size={14} />
+            <Icon d={P.catalog} size={14} />
             Каталог
           </button>
         </div>
@@ -722,7 +742,7 @@ function InputComposer({ mode, modeLocked, onModeChange, onSend, loading }) {
           onClick={() => onModeChange("brief")}
         >
           <span className="mode-tab-icon"><Icon d={P.brief} size={13} /></span>
-          <span className="mode-tab-label">Планирование брифа</span>
+          <span className="mode-tab-label">Планирование</span>
         </button>
         <button
           className={`mode-tab ${mode === "search" ? "mode-tab-active" : ""}`}
@@ -732,7 +752,7 @@ function InputComposer({ mode, modeLocked, onModeChange, onSend, loading }) {
           onClick={() => onModeChange("search")}
         >
           <span className="mode-tab-icon"><Icon d={P.search} size={13} /></span>
-          <span className="mode-tab-label">Семантический поиск</span>
+          <span className="mode-tab-label">Поиск</span>
         </button>
       </div>
     </div>
@@ -752,7 +772,7 @@ function ChatArea({ mode, messages, loading, onModeChange, onSend }) {
       <div className="chat-thread" ref={threadRef}>
         {messages.length === 0 && (
           <div className="empty-chat">
-            <ArgusOrb loading={false} />
+            <ArgusOrb loading={false} particles={false} compact />
             <div className="greeting-name">Привет!</div>
             <div className="greeting-q">{mode === "search" ? "Введите запрос для поиска по каталогу." : "Опишите мероприятие, и я соберу бриф."}</div>
           </div>
@@ -770,7 +790,33 @@ function formatMoney(value) {
   return `${Number(value).toLocaleString("ru-RU", { maximumFractionDigits: 0 })} ₽`;
 }
 
-function CatalogView({ accessToken }) {
+function CatalogStatus({ status }) {
+  return (
+    <div className="catalog-status" aria-label="Состояние каталога">
+      <div className="catalog-status-title">СОСТОЯНИЕ</div>
+      <div className="catalog-status-grid">
+        <div className="catalog-status-item">
+          <span>Статус</span>
+          <strong>{status.stage}</strong>
+        </div>
+        <div className="catalog-status-item">
+          <span>Строк</span>
+          <strong>{status.row_count || 0}</strong>
+        </div>
+        <div className="catalog-status-item">
+          <span>Векторов</span>
+          <strong>{status.embedded_count || 0}</strong>
+        </div>
+        <div className="catalog-status-item">
+          <span>Размерность</span>
+          <strong>{status.vector_size || "—"}</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CatalogView({ accessToken, status }) {
   const [suppliers, setSuppliers] = useState([]);
   const [query, setQuery] = useState("");
   const [appliedQuery, setAppliedQuery] = useState("");
@@ -871,6 +917,8 @@ function CatalogView({ accessToken }) {
       </div>
 
       {error && <div className="catalog-error">{error}</div>}
+
+      <CatalogStatus status={status} />
 
       <div className="catalog-layout">
         <div className="supplier-list" aria-busy={listLoading}>
@@ -990,7 +1038,6 @@ function AuthGate({ onSession }) {
             value={password}
             autoComplete={mode === "signin" ? "current-password" : "new-password"}
             required
-            minLength={mode === "signup" ? 6 : undefined}
             onChange={(event) => setPassword(event.target.value)}
           />
         </label>
@@ -1177,8 +1224,14 @@ export default function App() {
     <>
       <AnimatedBg />
       <div className="app">
+        <input
+          className="sidebar-toggle-input"
+          id="sidebar-collapse-toggle"
+          type="checkbox"
+          aria-label="Свернуть боковую панель"
+        />
         <Sidebar
-          status={status}
+          catalogReady={status.ready}
           userEmail={userEmail}
           view={view}
           onViewChange={setView}
@@ -1188,13 +1241,13 @@ export default function App() {
         <main className="main">
           <Header status={status} view={view} onViewChange={setView} />
           {status.ready && view === "catalog" ? (
-            <CatalogView accessToken={accessToken} />
+            <CatalogView accessToken={accessToken} status={status} />
           ) : status.ready ? (
             <ChatArea mode={mode} messages={messages} loading={loading} onModeChange={setMode} onSend={handleSend} />
           ) : (
             <UploadGate status={status} onUpload={uploadCatalog} />
           )}
-          <div className="m-footer">ARGUS MVP · PostgreSQL/pgvector · LM Studio · локальная демонстрация</div>
+          <div className="m-footer">argus</div>
         </main>
       </div>
     </>
