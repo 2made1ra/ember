@@ -556,13 +556,13 @@ function Header() {
 function UploadGate({ status, onUpload }) {
   const [drag, setDrag] = useState(false);
   const inputRef = useRef(null);
-  const busy = ["queued", "parsing", "embedding", "qdrant", "uploading"].includes(status.stage);
+  const busy = ["queued", "parsing", "embedding", "postgres", "uploading"].includes(status.stage);
 
   const progress = useMemo(() => {
     if (status.row_count && status.embedded_count) return Math.round((status.embedded_count / status.row_count) * 100);
     if (status.stage === "ready") return 100;
     if (status.stage === "parsing") return 10;
-    if (status.stage === "qdrant") return 85;
+    if (status.stage === "postgres") return 85;
     if (status.stage === "uploading") return 94;
     return 0;
   }, [status]);
@@ -589,7 +589,7 @@ function UploadGate({ status, onUpload }) {
       >
         <div className="upload-kicker">Каталог цен</div>
         <h1>Загрузить каталог</h1>
-        <p>Выберите CSV с позициями прайса. MVP возьмёт готовые embeddings из файла и создаст свежую коллекцию Qdrant.</p>
+        <p>Выберите CSV с позициями прайса. MVP возьмёт готовые embeddings из файла и загрузит каталог в PostgreSQL/pgvector.</p>
         <input
           ref={inputRef}
           type="file"
@@ -974,7 +974,7 @@ export default function App() {
           ) : (
             <UploadGate status={status} onUpload={uploadCatalog} />
           )}
-          <div className="m-footer">ARGUS MVP · Qdrant · LM Studio · локальная демонстрация</div>
+          <div className="m-footer">ARGUS MVP · PostgreSQL/pgvector · LM Studio · локальная демонстрация</div>
         </main>
       </div>
     </>

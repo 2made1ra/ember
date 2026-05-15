@@ -81,6 +81,9 @@ def _catalog_item(item_id="item-1", vector=None, **payload_overrides):
 
 
 class PostgresCatalogStoreReplaceTests(unittest.TestCase):
+    def setUp(self):
+        PostgresCatalogStore._schema_ready_databases.clear()
+
     def test_replace_catalog_creates_schema_deletes_old_rows_and_inserts_payload_vectors(self):
         conn = _Connection()
         store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
@@ -171,6 +174,9 @@ class PostgresCatalogStoreReplaceTests(unittest.TestCase):
 
 
 class PostgresCatalogStoreSearchTests(unittest.TestCase):
+    def setUp(self):
+        PostgresCatalogStore._schema_ready_databases.clear()
+
     def test_search_orders_by_pgvector_distance_and_returns_existing_payload_shape(self):
         rows = [
             {
@@ -266,6 +272,26 @@ class PostgresCatalogStoreSearchTests(unittest.TestCase):
 
         schema_calls = [sql for sql, _ in conn.calls if "CREATE TABLE IF NOT EXISTS catalog_embeddings" in sql]
         self.assertEqual(len(schema_calls), 1)
+
+    def test_search_ensures_schema_once_across_store_instances(self):
+        first_conn = _Connection()
+        second_conn = _Connection()
+        first_store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+        second_store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+
+        with patch.object(first_store, "_connect", return_value=first_conn):
+            first_store.search([0.1, 0.2, 0.3], limit=1)
+        with patch.object(second_store, "_connect", return_value=second_conn):
+            second_store.search([0.1, 0.2, 0.3], limit=1)
+
+        first_schema_calls = [
+            sql for sql, _ in first_conn.calls if "CREATE TABLE IF NOT EXISTS catalog_embeddings" in sql
+        ]
+        second_schema_calls = [
+            sql for sql, _ in second_conn.calls if "CREATE TABLE IF NOT EXISTS catalog_embeddings" in sql
+        ]
+        self.assertEqual(len(first_schema_calls), 1)
+        self.assertEqual(second_schema_calls, [])
 
 
 if __name__ == "__main__":

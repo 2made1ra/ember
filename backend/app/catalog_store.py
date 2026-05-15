@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from threading import Lock
 from typing import Any
+from typing import ClassVar
 
 from .catalog import CatalogItem
 from .config import Settings, get_settings
@@ -22,9 +24,11 @@ def _supplier_id(payload: dict[str, Any]) -> str:
 
 
 class PostgresCatalogStore:
+    _schema_lock: ClassVar[Lock] = Lock()
+    _schema_ready_databases: ClassVar[set[str]] = set()
+
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
-        self._schema_ready = False
 
     def _connect(self):
         try:
@@ -39,53 +43,57 @@ class PostgresCatalogStore:
         )
 
     def ensure_schema(self) -> None:
-        if self._schema_ready:
+        database_url = self.settings.database_url
+        if database_url in self._schema_ready_databases:
             return
-        with self._connect() as conn:
-            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS catalog_suppliers (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    inn TEXT,
-                    city TEXT,
-                    city_normalized TEXT,
-                    phone TEXT,
-                    email TEXT,
-                    status TEXT,
-                    status_normalized TEXT
+        with self._schema_lock:
+            if database_url in self._schema_ready_databases:
+                return
+            with self._connect() as conn:
+                conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS catalog_suppliers (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        inn TEXT,
+                        city TEXT,
+                        city_normalized TEXT,
+                        phone TEXT,
+                        email TEXT,
+                        status TEXT,
+                        status_normalized TEXT
+                    )
+                    """
                 )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS catalog_price_items (
-                    id TEXT PRIMARY KEY,
-                    supplier_id TEXT REFERENCES catalog_suppliers(id) ON DELETE SET NULL,
-                    name TEXT,
-                    category TEXT,
-                    unit TEXT,
-                    unit_price DOUBLE PRECISION NOT NULL DEFAULT 0,
-                    source_text TEXT,
-                    created_at TEXT,
-                    section TEXT,
-                    has_vat TEXT,
-                    service_type TEXT,
-                    unit_kind TEXT,
-                    quantity_kind TEXT
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS catalog_price_items (
+                        id TEXT PRIMARY KEY,
+                        supplier_id TEXT REFERENCES catalog_suppliers(id) ON DELETE SET NULL,
+                        name TEXT,
+                        category TEXT,
+                        unit TEXT,
+                        unit_price DOUBLE PRECISION NOT NULL DEFAULT 0,
+                        source_text TEXT,
+                        created_at TEXT,
+                        section TEXT,
+                        has_vat TEXT,
+                        service_type TEXT,
+                        unit_kind TEXT,
+                        quantity_kind TEXT
+                    )
+                    """
                 )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS catalog_embeddings (
-                    item_id TEXT PRIMARY KEY REFERENCES catalog_price_items(id) ON DELETE CASCADE,
-                    embedding vector NOT NULL
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS catalog_embeddings (
+                        item_id TEXT PRIMARY KEY REFERENCES catalog_price_items(id) ON DELETE CASCADE,
+                        embedding vector NOT NULL
+                    )
+                    """
                 )
-                """
-            )
-        self._schema_ready = True
+            self._schema_ready_databases.add(database_url)
 
     def replace_catalog(self, items: list[CatalogItem]) -> None:
         self.ensure_schema()
