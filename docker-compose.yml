@@ -9,6 +9,52 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus -d argus"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    profiles:
+      - app
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      LM_STUDIO_CHAT_MODEL: ${LM_STUDIO_CHAT_MODEL:-local-model}
+      API_KEY: ${API_KEY:-}
+      CHAT_BASE_URL: ${CHAT_BASE_URL:-https://api.vsellm.ru/v1}
+      CHAT_MODEL: ${CHAT_MODEL:-openai/gpt-oss-120b}
+      CHAT_API_KEY: ${CHAT_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://api.vsellm.ru/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-openai/text-embedding-3-small}
+      DATABASE_URL: postgresql://argus:argus@postgres:5432/argus
+      AUTH_SESSION_TTL_SECONDS: ${AUTH_SESSION_TTL_SECONDS:-604800}
+      DEV_ADMIN_EMAIL: ${DEV_ADMIN_EMAIL:-developer@example.com}
+      DEV_ADMIN_PASSWORD: ${DEV_ADMIN_PASSWORD:-}
+      DEV_ADMIN_ROLE: ${DEV_ADMIN_ROLE:-admin}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,0.0.0.0,host.docker.internal,postgres,backend}
+      no_proxy: ${no_proxy:-localhost,127.0.0.1,::1,0.0.0.0,host.docker.internal,postgres,backend}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    profiles:
+      - app
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      VITE_DEV_PROXY_TARGET: http://backend:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:

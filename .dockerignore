@@ -1,0 +1,7 @@
+.git
+.uv-cache
+backend/.venv
+frontend/dist
+frontend/node_modules
+node_modules
+*.log
