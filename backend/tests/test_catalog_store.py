@@ -4,6 +4,7 @@ from unittest.mock import patch
 from app.catalog import CatalogItem
 from app.config import Settings
 from app.catalog_store import PostgresCatalogStore
+from app.errors import DependencyUnavailableError
 
 
 class _Transaction:
@@ -162,15 +163,26 @@ class PostgresCatalogStoreReplaceTests(unittest.TestCase):
         self.assertIn("TYPE vector(3)", "\n".join(call[0] for call in conn.calls))
         self.assertIn("vector_cosine_ops", conn.events[create_index][1])
 
-    def test_supplier_id_falls_back_to_normalized_supplier_name(self):
+    def test_supplier_id_falls_back_to_url_safe_normalized_supplier_name(self):
         conn = _Connection()
         store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
 
         with patch.object(store, "_connect", return_value=conn):
-            store.replace_catalog([_catalog_item(supplier_inn="", supplier="  ООО Ромашка  ")])
+            store.replace_catalog([_catalog_item(supplier_inn="", supplier="  ООО Ромашка / Север  ")])
 
         supplier_params = conn.batch_calls[0][1][0]
-        self.assertEqual(supplier_params[0], "ооо ромашка")
+        self.assertEqual(supplier_params[0], "ооо-ромашка-север")
+        self.assertNotIn("/", supplier_params[0])
+
+    def test_supplier_id_keeps_supplier_inn_when_present(self):
+        conn = _Connection()
+        store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+
+        with patch.object(store, "_connect", return_value=conn):
+            store.replace_catalog([_catalog_item(supplier_inn="7704856280", supplier="ООО / Ромашка")])
+
+        supplier_params = conn.batch_calls[0][1][0]
+        self.assertEqual(supplier_params[0], "7704856280")
 
 
 class PostgresCatalogStoreSearchTests(unittest.TestCase):
@@ -384,6 +396,24 @@ class PostgresCatalogStoreSupplierTests(unittest.TestCase):
             supplier = store.get_supplier("missing")
 
         self.assertIsNone(supplier)
+
+    def test_list_suppliers_wraps_schema_failures_as_dependency_unavailable(self):
+        store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+
+        with patch.object(store, "ensure_schema", side_effect=RuntimeError("schema failed")):
+            with self.assertRaises(DependencyUnavailableError) as ctx:
+                store.list_suppliers()
+
+        self.assertIn("список поставщиков", str(ctx.exception))
+
+    def test_get_supplier_wraps_schema_failures_as_dependency_unavailable(self):
+        store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+
+        with patch.object(store, "ensure_schema", side_effect=RuntimeError("schema failed")):
+            with self.assertRaises(DependencyUnavailableError) as ctx:
+                store.get_supplier("7704856280")
+
+        self.assertIn("получить поставщика", str(ctx.exception))
 
 
 if __name__ == "__main__":

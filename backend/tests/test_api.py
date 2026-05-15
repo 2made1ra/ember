@@ -253,6 +253,27 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()["supplier"]["items"][0]["id"], "item-1")
         store.get_supplier.assert_called_once_with("7704856280")
 
+    def test_catalog_supplier_detail_accepts_url_safe_fallback_supplier_id(self):
+        store = Mock()
+        store.get_supplier.return_value = {
+            "id": "ооо-ромашка-север",
+            "name": "ООО Ромашка / Север",
+            "inn": None,
+            "city": "Москва",
+            "phone": None,
+            "email": None,
+            "status": "Активен",
+            "items": [],
+        }
+        set_catalog_status(ready=True, stage="ready", row_count=1565)
+
+        with patch("app.main.PostgresCatalogStore", return_value=store):
+            response = self.client.get("/api/catalog/suppliers/ооо-ромашка-север")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["supplier"]["name"], "ООО Ромашка / Север")
+        store.get_supplier.assert_called_once_with("ооо-ромашка-север")
+
     def test_catalog_supplier_detail_returns_404_for_unknown_supplier(self):
         store = Mock()
         store.get_supplier.return_value = None

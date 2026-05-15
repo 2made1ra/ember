@@ -20,7 +20,9 @@ def _supplier_id(payload: dict[str, Any]) -> str:
         return inn
     name = str(payload.get("supplier") or "").strip().lower()
     normalized_name = re.sub(r"\s+", " ", name)
-    return normalized_name or "unknown"
+    slug = re.sub(r"[^0-9a-zа-яё_-]+", "-", normalized_name)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug or "unknown"
 
 
 class PostgresCatalogStore:
@@ -201,7 +203,6 @@ class PostgresCatalogStore:
         return [{"score": float(row["score"]), "payload": _row_payload(row)} for row in rows]
 
     def list_suppliers(self, limit: int = 50, query: str | None = None) -> list[dict[str, Any]]:
-        self.ensure_schema()
         where_sql = ""
         params: list[Any] = []
         normalized_query = (query or "").strip()
@@ -212,6 +213,7 @@ class PostgresCatalogStore:
         params.append(limit)
 
         try:
+            self.ensure_schema()
             with self._connect() as conn:
                 rows = conn.execute(
                     f"""
@@ -241,8 +243,8 @@ class PostgresCatalogStore:
         return [_supplier_summary(row) for row in rows]
 
     def get_supplier(self, supplier_id: str) -> dict[str, Any] | None:
-        self.ensure_schema()
         try:
+            self.ensure_schema()
             with self._connect() as conn:
                 rows = conn.execute(
                     """

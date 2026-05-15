@@ -532,11 +532,31 @@ function Sidebar({ status, userEmail, view, onViewChange, onReset, onLogout }) {
   );
 }
 
-function Header() {
+function Header({ status, view, onViewChange }) {
   const [guideOpen, setGuideOpen] = useState(false);
 
   return (
     <div className="m-hdr">
+      {status.ready && (
+        <div className="mobile-view-switch" aria-label="Переключить раздел">
+          <button
+            className={`mobile-view-btn ${view === "chat" ? "mobile-view-btn-active" : ""}`}
+            type="button"
+            onClick={() => onViewChange("chat")}
+          >
+            <Icon d={P.brief} size={14} />
+            Чат
+          </button>
+          <button
+            className={`mobile-view-btn ${view === "catalog" ? "mobile-view-btn-active" : ""}`}
+            type="button"
+            onClick={() => onViewChange("catalog")}
+          >
+            <Icon d={P.plug} size={14} />
+            Каталог
+          </button>
+        </div>
+      )}
       <div className="m-hdr-r">
         <button
           className={`h-ico-btn ${guideOpen ? "h-ico-btn-active" : ""}`}
@@ -759,6 +779,7 @@ function CatalogView({ accessToken }) {
   const [listLoading, setListLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
+  const detailRequestRef = useRef(0);
 
   const loadSuppliers = async (nextQuery = appliedQuery) => {
     setListLoading(true);
@@ -784,17 +805,23 @@ function CatalogView({ accessToken }) {
   }, [accessToken]);
 
   const openSupplier = async (supplierId) => {
+    const requestId = detailRequestRef.current + 1;
+    detailRequestRef.current = requestId;
     setSelectedId(supplierId);
     setDetailLoading(true);
     setError("");
     try {
       const body = await fetchJson(`/api/catalog/suppliers/${encodeURIComponent(supplierId)}`, {}, accessToken);
+      if (detailRequestRef.current !== requestId) return;
       setSelectedSupplier(body.supplier);
     } catch (loadError) {
+      if (detailRequestRef.current !== requestId) return;
       setSelectedSupplier(null);
       setError(loadError.message || "Не удалось загрузить поставщика.");
     } finally {
-      setDetailLoading(false);
+      if (detailRequestRef.current === requestId) {
+        setDetailLoading(false);
+      }
     }
   };
 
@@ -1139,7 +1166,7 @@ export default function App() {
           onLogout={logout}
         />
         <main className="main">
-          <Header />
+          <Header status={status} view={view} onViewChange={setView} />
           {status.ready && view === "catalog" ? (
             <CatalogView accessToken={accessToken} />
           ) : status.ready ? (
