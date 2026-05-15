@@ -4,6 +4,7 @@ WORKDIR /app
 
 ENV UV_CACHE_DIR=/app/.uv-cache \
     UV_LINK_MODE=copy \
+    PYTHONPATH=/app/backend \
     PYTHONUNBUFFERED=1
 
 COPY backend/pyproject.toml backend/uv.lock ./backend/
