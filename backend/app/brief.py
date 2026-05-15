@@ -369,7 +369,7 @@ def search_catalog_for_services(
         filters = {"service_type": service_type, "only_active": True}
         if city_filter:
             filters["city"] = city_filter
-        items = searcher.search(query, limit=3, filters=filters)
+        items = searcher.search(query, limit=5, filters=filters)
         need = state.service_needs[service_type]
         need.search_queries = [query]
         need.candidate_items = items
@@ -413,8 +413,24 @@ def estimate_budget(lines: list[dict[str, Any]]) -> dict[str, Any]:
 def budget_lines_from_results(results: list[dict[str, Any]], state: BriefState) -> list[dict[str, Any]]:
     lines = []
     used_service_types: set[str] = set()
+    selected_ids = {
+        str(item_id)
+        for need in state.service_needs.values()
+        for item_id in need.selected_item_ids
+    }
+    selected_ids.update(
+        str(_payload(item).get("id"))
+        for item in state.selected_price_items
+        if _payload(item).get("id")
+    )
+    if not selected_ids:
+        return lines
+
     for result in results:
         payload = result.get("payload", result)
+        item_id = str(payload.get("id", result.get("id")) or "")
+        if item_id not in selected_ids:
+            continue
         service_type = payload.get("service_type")
         if service_type in used_service_types:
             continue
@@ -445,6 +461,59 @@ def _format_money(value: Any) -> str:
     return f"{amount:,.2f}".replace(",", " ").replace(".", ",") + " ₽"
 
 
+def _payload(item: dict[str, Any]) -> dict[str, Any]:
+    payload = item.get("payload")
+    return payload if isinstance(payload, dict) else item
+
+
+def _candidate_service_type(item: dict[str, Any]) -> str | None:
+    payload = _payload(item)
+    return payload.get("service_type")
+
+
+def _render_candidate_shortlist(found_items: list[dict[str, Any]]) -> list[str]:
+    lines = ["\nКороткий список подрядчиков:"]
+    lines.append("Это кандидаты для выбора менеджером, не финальный состав подрядчиков.")
+
+    for service_type in SERVICE_LABELS:
+        service_items = [
+            item for item in found_items if _candidate_service_type(item) == service_type
+        ]
+        if not service_items:
+            continue
+
+        label = SERVICE_LABELS[service_type]
+        lines.append(f"\n{label}:")
+        suppliers: dict[str, list[dict[str, Any]]] = {}
+        for item in service_items:
+            payload = _payload(item)
+            supplier = payload.get("supplier") or "поставщик не указан"
+            suppliers.setdefault(supplier, []).append(payload)
+
+        for supplier, items in suppliers.items():
+            lines.append(f"- {supplier}")
+            for payload in items:
+                lines.append(
+                    f"  - ID {payload.get('id')}: {payload.get('name')} — "
+                    f"{_format_money(payload.get('unit_price'))} / {payload.get('unit') or 'ед.'}"
+                )
+
+    unknown_items = [
+        item for item in found_items if _candidate_service_type(item) not in SERVICE_LABELS
+    ]
+    if unknown_items:
+        lines.append("\nБез категории услуги:")
+        for item in unknown_items:
+            payload = _payload(item)
+            lines.append(
+                f"- {payload.get('supplier') or 'поставщик не указан'}: "
+                f"ID {payload.get('id')}: {payload.get('name')} — "
+                f"{_format_money(payload.get('unit_price'))} / {payload.get('unit') or 'ед.'}"
+            )
+
+    return lines
+
+
 def default_answer(state: BriefState, found_items: list[dict[str, Any]], budget: dict[str, Any]) -> str:
     if state.open_questions and not found_items:
         return "Нужны уточнения, чтобы собрать бриф:\n" + "\n".join(
@@ -457,20 +526,13 @@ def default_answer(state: BriefState, found_items: list[dict[str, Any]], budget:
         parts.extend(f"- {item}" for item in state.confirmed_requirements)
 
     if found_items:
-        parts.append("\nПредварительные кандидаты из каталога:")
-        parts.append("Карточки ниже еще не выбраны в бриф.")
-        for item in found_items[:9]:
-            payload = item.get("payload", item)
-            parts.append(
-                f"- ID {payload.get('id')}: {payload.get('name')} — "
-                f"{_format_money(payload.get('unit_price'))} / {payload.get('unit') or 'ед.'}; "
-                f"поставщик: {payload.get('supplier') or 'не указан'}"
-            )
+        parts.extend(_render_candidate_shortlist(found_items))
     else:
         parts.append("\nВ каталоге нет подходящих строк по текущим вводным и фильтрам.")
 
     if budget["lines"]:
-        parts.append(f"\nПредварительная смета: {_format_money(budget['total'])}")
+        parts.append(f"\nОриентировочная смета по выбранным позициям: {_format_money(budget['total'])}")
+        parts.append("Это расчетный ориентир; финальный состав подрядчиков выбирает менеджер.")
         for line in budget["lines"]:
             parts.append(
                 f"- {line['name']}: {_format_money(line['unit_price'])} × "
@@ -531,7 +593,7 @@ def _run_workflow(state: BriefState, message: str, searcher: Searcher) -> dict[s
 
     def response_generation(workflow: BriefWorkflowState) -> BriefWorkflowState:
         if not workflow.get("blocking_questions") and workflow.get("found_items"):
-            workflow["state"].stage = "final_brief"
+            workflow["state"].stage = "shortlist_brief"
             workflow["state"].open_questions = followup_questions(workflow["state"])
         fallback = default_answer(
             workflow["state"],

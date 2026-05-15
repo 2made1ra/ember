@@ -16,6 +16,30 @@ class RecordingSearcher:
 
 
 class BriefAgentTests(unittest.TestCase):
+    def _catalog_item(
+        self,
+        item_id,
+        name,
+        supplier,
+        service_type,
+        unit_price=1000,
+        unit="шт",
+        quantity_kind="fixed",
+    ):
+        return {
+            "score": 0.8,
+            "payload": {
+                "id": item_id,
+                "name": name,
+                "category": service_type,
+                "unit": unit,
+                "unit_price": unit_price,
+                "supplier": supplier,
+                "service_type": service_type,
+                "quantity_kind": quantity_kind,
+            },
+        }
+
     def test_prompt_contracts_are_split_by_llm_role(self):
         self.assertIsNotNone(util.find_spec("app.prompts"))
         prompts = import_module("app.prompts")
@@ -121,12 +145,60 @@ class BriefAgentTests(unittest.TestCase):
         self.assertEqual(service_needs["av_equipment"]["status"], "needed")
         self.assertEqual(
             [(call["filters"]["service_type"], call["limit"]) for call in searcher.calls],
-            [("catering", 3), ("av_equipment", 3)],
+            [("catering", 5), ("av_equipment", 5)],
         )
         self.assertTrue(all(call["filters"]["city"] == "москва" for call in searcher.calls))
         self.assertEqual(response["found_items"][0]["payload"]["id"], "557")
         self.assertIn("ID 557", response["message"])
         self.assertIn("ID 664", response["message"])
+
+    def test_brief_search_stores_shortlists_grouped_by_service_and_supplier(self):
+        catering_items = [
+            self._catalog_item("c1", "Кофе-брейк базовый", "Комбинат питания", "catering"),
+            self._catalog_item("c2", "Кофе-брейк расширенный", "Комбинат питания", "catering"),
+            self._catalog_item("c3", "Фуршет", "Fresh Food", "catering"),
+            self._catalog_item("c4", "Обед", "Fresh Food", "catering"),
+            self._catalog_item("c5", "Ужин", "Event Catering", "catering"),
+        ]
+        av_items = [
+            self._catalog_item("a1", "Радиомикрофон", "Премьер-Шоу", "av_equipment"),
+            self._catalog_item("a2", "Звуковой комплект", "Премьер-Шоу", "av_equipment"),
+            self._catalog_item("a3", "Экран", "AV Profi", "av_equipment"),
+            self._catalog_item("a4", "Проектор", "AV Profi", "av_equipment"),
+            self._catalog_item("a5", "Световой комплект", "Light Team", "av_equipment"),
+        ]
+        searcher = RecordingSearcher({"catering": catering_items, "av_equipment": av_items})
+        state = BriefState()
+
+        response = run_brief_turn(
+            state=state,
+            message=(
+                "Нужна офлайн конференция в Москве на 100 человек. "
+                "Планируем кофе-брейк, фуршет, звук и радиомикрофоны. Бюджет стандарт."
+            ),
+            searcher=searcher,
+            chat_client=None,
+        )
+
+        service_needs = response["brief_state"]["service_needs"]
+        self.assertEqual(len(service_needs["catering"]["candidate_items"]), 5)
+        self.assertEqual(len(service_needs["av_equipment"]["candidate_items"]), 5)
+        self.assertTrue(all(call["limit"] >= 5 for call in searcher.calls))
+        self.assertIn("Короткий список подрядчиков", response["message"])
+        self.assertIn("Питание", response["message"])
+        self.assertIn("Оборудование и AV", response["message"])
+        self.assertIn("Комбинат питания", response["message"])
+        self.assertIn("Fresh Food", response["message"])
+        self.assertIn("Премьер-Шоу", response["message"])
+        self.assertIn("AV Profi", response["message"])
+        self.assertLess(
+            response["message"].index("Комбинат питания"),
+            response["message"].index("Fresh Food"),
+        )
+        self.assertLess(
+            response["message"].index("Премьер-Шоу"),
+            response["message"].index("AV Profi"),
+        )
 
     def test_found_items_remain_candidates_until_user_explicitly_selects_them(self):
         searcher = RecordingSearcher(
@@ -167,6 +239,9 @@ class BriefAgentTests(unittest.TestCase):
         )
         self.assertEqual(response["brief_state"]["selected_price_items"], [])
         self.assertIn("кандидат", response["message"].lower())
+        self.assertEqual(response["budget"]["lines"], [])
+        self.assertNotIn("Предварительная смета", response["message"])
+        self.assertNotIn("= 50 000 ₽", response["message"])
 
     def test_budget_uses_variable_and_fixed_quantity_rules(self):
         result = estimate_budget(
