@@ -51,7 +51,6 @@ class CatalogValidationError(ValueError):
 @dataclass(frozen=True)
 class CatalogItem:
     id: str
-    embedding_text: str
     vector: list[float]
     payload: dict[str, Any]
     unit_price: float
@@ -205,17 +204,6 @@ def parse_embedding(value: Any) -> list[float]:
     return vector
 
 
-def build_embedding_text(row: dict[str, Any]) -> str:
-    parts = [
-        clean_cell(row.get("name")),
-        clean_cell(row.get("unit")),
-        clean_cell(row.get("category")),
-        clean_cell(row.get("section")),
-        clean_cell(row.get("supplier")),
-    ]
-    return " ".join(part for part in parts if part)
-
-
 def validate_columns(fieldnames: list[str] | None) -> None:
     available = set(fieldnames or [])
     missing = sorted(REQUIRED_COLUMNS - available)
@@ -242,14 +230,10 @@ def row_to_item(row: dict[str, Any]) -> CatalogItem:
     if not item_id:
         raise CatalogValidationError("row id is required")
 
-    embedding_text = build_embedding_text(row)
-    if not embedding_text:
-        raise CatalogValidationError(f"row {item_id} has empty embedding text")
     vector = parse_embedding(row.get("embedding"))
 
     return CatalogItem(
         id=item_id,
-        embedding_text=embedding_text,
         vector=vector,
         payload=payload,
         unit_price=unit_price,

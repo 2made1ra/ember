@@ -4,7 +4,6 @@ import unittest
 
 from app.catalog import (
     CatalogValidationError,
-    build_embedding_text,
     parse_catalog_csv,
     parse_embedding,
     parse_unit_price,
@@ -12,20 +11,6 @@ from app.catalog import (
 
 
 class CatalogTests(unittest.TestCase):
-    def test_builds_embedding_text_in_required_order_without_extra_prefixes(self):
-        row = {
-            "name": "Организация обеда",
-            "unit": "шт",
-            "category": "Питание",
-            "section": "Обед",
-            "supplier": "ФГБУ «Комбинат питания»",
-        }
-
-        self.assertEqual(
-            build_embedding_text(row),
-            "Организация обеда шт Питание Обед ФГБУ «Комбинат питания»",
-        )
-
     def test_parse_unit_price_accepts_comma_dot_and_empty_values(self):
         self.assertEqual(parse_unit_price("886,5"), 886.5)
         self.assertEqual(parse_unit_price("660"), 660.0)
@@ -88,10 +73,6 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].id, "556")
         self.assertEqual(items[0].unit_price, 886.5)
-        self.assertEqual(
-            items[0].embedding_text,
-            "Организация обеда шт Питание Обед ФГБУ «Комбинат питания»",
-        )
         self.assertNotIn("embedding", items[0].payload)
 
     def test_parse_embedding_reads_json_float_vector(self):
@@ -141,10 +122,6 @@ class CatalogTests(unittest.TestCase):
         items = parse_catalog_csv(buf.getvalue().encode("utf-8"))
 
         self.assertEqual(items[0].vector, [0.1, 0.2, 0.3])
-        self.assertEqual(
-            items[0].embedding_text,
-            "Организация кофе-брейка шт Питание Кофе-брейк ФГБУ «Комбинат питания»",
-        )
 
     def test_parse_catalog_adds_brief_payload_fields(self):
         buf = io.StringIO()
