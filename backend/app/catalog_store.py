@@ -53,6 +53,7 @@ class PostgresCatalogStore:
                 return
             with self._connect() as conn:
                 conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS catalog_suppliers (
@@ -92,6 +93,45 @@ class PostgresCatalogStore:
                     CREATE TABLE IF NOT EXISTS catalog_embeddings (
                         item_id TEXT PRIMARY KEY REFERENCES catalog_price_items(id) ON DELETE CASCADE,
                         embedding vector NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS catalog_price_items_lexical_tsv_idx
+                    ON catalog_price_items USING gin (
+                        to_tsvector(
+                            'simple',
+                            coalesce(name, '') || ' ' ||
+                            coalesce(category, '') || ' ' ||
+                            coalesce(section, '') || ' ' ||
+                            coalesce(source_text, '')
+                        )
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS catalog_price_items_lexical_trgm_idx
+                    ON catalog_price_items USING gin (
+                        (
+                            coalesce(name, '') || ' ' ||
+                            coalesce(category, '') || ' ' ||
+                            coalesce(section, '') || ' ' ||
+                            coalesce(source_text, '')
+                        ) gin_trgm_ops
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS catalog_suppliers_lexical_trgm_idx
+                    ON catalog_suppliers USING gin (
+                        (
+                            coalesce(name, '') || ' ' ||
+                            coalesce(city, '') || ' ' ||
+                            coalesce(inn, '')
+                        ) gin_trgm_ops
                     )
                     """
                 )
@@ -198,6 +238,116 @@ class PostgresCatalogStore:
         except Exception as exc:
             raise DependencyUnavailableError(
                 "PostgreSQL недоступен: не удалось выполнить поиск в pgvector."
+            ) from exc
+
+        return [{"score": float(row["score"]), "payload": _row_payload(row)} for row in rows]
+
+    def lexical_search(
+        self,
+        query: str,
+        limit: int = 10,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        where: list[str] = []
+        params: list[Any] = [query, query]
+        filters = filters or {}
+        if filters.get("service_type"):
+            where.append("pi.service_type = %s")
+            params.append(filters["service_type"])
+        if filters.get("city"):
+            where.append("s.city_normalized = %s")
+            params.append(filters["city"])
+        if filters.get("only_active"):
+            where.append("s.status_normalized = %s")
+            params.append("активен")
+
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        params.append(limit)
+        try:
+            self.ensure_schema()
+            with self._connect() as conn:
+                rows = conn.execute(
+                    f"""
+                    WITH lexical_query AS (
+                        SELECT
+                            websearch_to_tsquery('simple', %s) AS tsq,
+                            %s::text AS raw_query
+                    ),
+                    documents AS (
+                        SELECT
+                            pi.id,
+                            pi.name,
+                            pi.category,
+                            pi.unit,
+                            pi.unit_price,
+                            pi.source_text,
+                            pi.section,
+                            pi.has_vat,
+                            pi.service_type,
+                            pi.unit_kind,
+                            pi.quantity_kind,
+                            s.name AS supplier,
+                            s.inn AS supplier_inn,
+                            s.city AS supplier_city,
+                            s.phone AS supplier_phone,
+                            s.email AS supplier_email,
+                            s.status AS supplier_status,
+                            s.city_normalized,
+                            s.status_normalized AS supplier_status_normalized,
+                            (
+                                coalesce(pi.name, '') || ' ' ||
+                                coalesce(pi.category, '') || ' ' ||
+                                coalesce(pi.section, '') || ' ' ||
+                                coalesce(pi.source_text, '') || ' ' ||
+                                coalesce(s.name, '') || ' ' ||
+                                coalesce(s.city, '') || ' ' ||
+                                coalesce(s.inn, '')
+                            ) AS document_text
+                        FROM catalog_price_items pi
+                        LEFT JOIN catalog_suppliers s ON s.id = pi.supplier_id
+                        {where_sql}
+                    )
+                    SELECT
+                        (
+                            ts_rank_cd(
+                                to_tsvector('simple', documents.document_text),
+                                lexical_query.tsq
+                            )
+                            + similarity(documents.document_text, lexical_query.raw_query)
+                        ) AS score,
+                        documents.id,
+                        documents.name,
+                        documents.category,
+                        documents.unit,
+                        documents.unit_price,
+                        documents.source_text,
+                        documents.section,
+                        documents.has_vat,
+                        documents.service_type,
+                        documents.unit_kind,
+                        documents.quantity_kind,
+                        documents.supplier,
+                        documents.supplier_inn,
+                        documents.supplier_city,
+                        documents.supplier_phone,
+                        documents.supplier_email,
+                        documents.supplier_status,
+                        documents.city_normalized,
+                        documents.supplier_status_normalized
+                    FROM documents
+                    CROSS JOIN lexical_query
+                    WHERE
+                        to_tsvector('simple', documents.document_text) @@ lexical_query.tsq
+                        OR documents.document_text ILIKE '%' || lexical_query.raw_query || '%'
+                        OR documents.document_text % lexical_query.raw_query
+                    ORDER BY score DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                ).fetchall()
+        except Exception as exc:
+            raise DependencyUnavailableError(
+                "PostgreSQL недоступен: не удалось выполнить лексический поиск."
             ) from exc
 
         return [{"score": float(row["score"]), "payload": _row_payload(row)} for row in rows]

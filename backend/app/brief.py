@@ -314,7 +314,7 @@ def blocking_questions(state: BriefState) -> list[str]:
     if not state.event_type:
         questions.append("Какой тип мероприятия планируется?")
     if not state.city:
-        questions.append("Где и когда пройдет мероприятие: город, дата и длительность?")
+        questions.append("В каком городе пройдет мероприятие?")
     if not state.guests_count:
         questions.append("Сколько участников ожидается?")
     if not state.budget_limit and not state.budget_tier:
@@ -328,8 +328,8 @@ def blocking_questions(state: BriefState) -> list[str]:
 
 def followup_questions(state: BriefState) -> list[str]:
     questions = []
-    if not state.date:
-        questions.append("Какая дата и длительность мероприятия?")
+    if not state.duration_days:
+        questions.append("Какая длительность мероприятия?")
     if not state.goal and not state.concept:
         questions.append("Есть ли цель, концепт или ключевая идея мероприятия?")
     return questions[:4]

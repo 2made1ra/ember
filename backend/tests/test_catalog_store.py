@@ -94,9 +94,13 @@ class PostgresCatalogStoreReplaceTests(unittest.TestCase):
 
         sql = "\n".join(call[0] for call in conn.calls)
         self.assertIn("CREATE EXTENSION IF NOT EXISTS vector", sql)
+        self.assertIn("CREATE EXTENSION IF NOT EXISTS pg_trgm", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS catalog_suppliers", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS catalog_price_items", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS catalog_embeddings", sql)
+        self.assertIn("catalog_price_items_lexical_tsv_idx", sql)
+        self.assertIn("catalog_price_items_lexical_trgm_idx", sql)
+        self.assertIn("catalog_suppliers_lexical_trgm_idx", sql)
 
         delete_index = next(
             i for i, event in enumerate(conn.events) if event[0] == "execute" and "DELETE FROM catalog_price_items" in event[1]
@@ -313,6 +317,63 @@ class PostgresCatalogStoreSearchTests(unittest.TestCase):
                 store.search([0.1, 0.2, 0.3], limit=1)
 
         self.assertIn("поиск в pgvector", str(ctx.exception))
+
+    def test_lexical_search_uses_fts_trigram_filters_and_existing_payload_shape(self):
+        rows = [
+            {
+                "score": 0.91,
+                "id": "item-1",
+                "name": "Кофе-брейк",
+                "category": "Питание",
+                "unit": "чел",
+                "unit_price": 450.0,
+                "source_text": "Кофе, чай и выпечка",
+                "section": "Кейтеринг",
+                "has_vat": "В т.ч. НДС",
+                "service_type": "catering",
+                "unit_kind": "person",
+                "quantity_kind": "per_guest",
+                "supplier": "ООО Питание",
+                "supplier_inn": "7704856280",
+                "supplier_city": "Москва",
+                "supplier_phone": "+7",
+                "supplier_email": "sales@example.test",
+                "supplier_status": "Активен",
+                "city_normalized": "москва",
+                "supplier_status_normalized": "активен",
+            }
+        ]
+        conn = _Connection(rows)
+        store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+
+        with patch.object(store, "_connect", return_value=conn):
+            results = store.lexical_search(
+                "кофе Москва 7704",
+                limit=5,
+                filters={"service_type": "catering", "city": "москва", "only_active": True},
+            )
+
+        search_sql, search_params = conn.calls[-1]
+        self.assertIn("websearch_to_tsquery('simple', %s)", search_sql)
+        self.assertIn("to_tsvector('simple'", search_sql)
+        self.assertIn("similarity(", search_sql)
+        self.assertIn("document_text % lexical_query.raw_query", search_sql)
+        self.assertIn("pi.service_type = %s", search_sql)
+        self.assertIn("s.city_normalized = %s", search_sql)
+        self.assertIn("s.status_normalized = %s", search_sql)
+        self.assertEqual(search_params, ("кофе Москва 7704", "кофе Москва 7704", "catering", "москва", "активен", 5))
+        self.assertEqual(results[0]["payload"]["id"], "item-1")
+        self.assertEqual(results[0]["payload"]["source_text"], "Кофе, чай и выпечка")
+        self.assertEqual(results[0]["payload"]["supplier_city"], "Москва")
+
+    def test_lexical_search_wraps_failures_as_dependency_unavailable(self):
+        store = PostgresCatalogStore(Settings(database_url="postgresql://test"))
+
+        with patch.object(store, "ensure_schema", side_effect=RuntimeError("schema failed")):
+            with self.assertRaises(DependencyUnavailableError) as ctx:
+                store.lexical_search("кофе", limit=1)
+
+        self.assertIn("лексический поиск", str(ctx.exception))
 
 
 class PostgresCatalogStoreSupplierTests(unittest.TestCase):

@@ -91,8 +91,33 @@ class BriefAgentTests(unittest.TestCase):
         self.assertEqual(response["brief_state"]["stage"], "intake")
         self.assertIn("Какой тип мероприятия", response["message"])
         self.assertIn("город", response["message"].lower())
+        self.assertNotIn("дат", response["message"].lower())
+        self.assertNotIn("когда", response["message"].lower())
         self.assertIn("Сколько участников", response["message"])
         self.assertLessEqual(len(response["brief_state"]["open_questions"]), 4)
+
+    def test_brief_questions_do_not_ask_for_event_date(self):
+        searcher = RecordingSearcher(
+            {"venue": [self._catalog_item("v1", "Конференц-зал", "Venue Team", "venue")]}
+        )
+        state = BriefState()
+
+        response = run_brief_turn(
+            state=state,
+            message=(
+                "Планируем образовательный семинар в Екатеринбурге на 40 участников. "
+                "Бюджет эконом, нужен конференц-зал."
+            ),
+            searcher=searcher,
+            chat_client=None,
+        )
+
+        self.assertEqual(response["brief_state"]["stage"], "shortlist_brief")
+        questions = response["brief_state"]["open_questions"]
+        rendered_questions = "\n".join(questions).lower()
+        self.assertNotIn("дат", rendered_questions)
+        self.assertNotIn("когда", rendered_questions)
+        self.assertIn("ID v1", response["message"])
 
     def test_filled_request_creates_service_needs_and_searches_relevant_catalog_blocks(self):
         searcher = RecordingSearcher(
