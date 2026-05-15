@@ -65,3 +65,12 @@ test("Vite reads shared environment variables from the project root", () => {
 
   assert.equal(viteConfig.envDir, projectRoot);
 });
+
+test("Catalog supplier list loading guards stale requests and reconciles selection from refs", () => {
+  const appSource = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
+
+  assert.match(appSource, /const listRequestRef = useRef\(0\);/);
+  assert.match(appSource, /const selectedIdRef = useRef\(null\);/);
+  assert.match(appSource, /if \(listRequestRef\.current !== requestId\) return;/);
+  assert.match(appSource, /selectedIdRef\.current/);
+});

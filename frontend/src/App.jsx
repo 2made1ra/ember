@@ -779,24 +779,41 @@ function CatalogView({ accessToken }) {
   const [listLoading, setListLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
+  const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  const selectedIdRef = useRef(null);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   const loadSuppliers = async (nextQuery = appliedQuery) => {
+    const requestId = listRequestRef.current + 1;
+    listRequestRef.current = requestId;
     setListLoading(true);
     setError("");
     try {
       const params = new URLSearchParams({ limit: "50" });
       if (nextQuery.trim()) params.set("query", nextQuery.trim());
       const body = await fetchJson(`/api/catalog/suppliers?${params.toString()}`, {}, accessToken);
-      setSuppliers(body.suppliers || []);
-      if (selectedId && !body.suppliers?.some((supplier) => supplier.id === selectedId)) {
+      if (listRequestRef.current !== requestId) return;
+
+      const nextSuppliers = body.suppliers || [];
+      setSuppliers(nextSuppliers);
+      const currentSelectedId = selectedIdRef.current;
+      if (currentSelectedId && !nextSuppliers.some((supplier) => supplier.id === currentSelectedId)) {
+        selectedIdRef.current = null;
+        detailRequestRef.current += 1;
         setSelectedId(null);
         setSelectedSupplier(null);
       }
     } catch (loadError) {
+      if (listRequestRef.current !== requestId) return;
       setError(loadError.message || "Не удалось загрузить поставщиков.");
     } finally {
-      setListLoading(false);
+      if (listRequestRef.current === requestId) {
+        setListLoading(false);
+      }
     }
   };
 
@@ -807,6 +824,7 @@ function CatalogView({ accessToken }) {
   const openSupplier = async (supplierId) => {
     const requestId = detailRequestRef.current + 1;
     detailRequestRef.current = requestId;
+    selectedIdRef.current = supplierId;
     setSelectedId(supplierId);
     setDetailLoading(true);
     setError("");
@@ -816,6 +834,8 @@ function CatalogView({ accessToken }) {
       setSelectedSupplier(body.supplier);
     } catch (loadError) {
       if (detailRequestRef.current !== requestId) return;
+      selectedIdRef.current = null;
+      setSelectedId(null);
       setSelectedSupplier(null);
       setError(loadError.message || "Не удалось загрузить поставщика.");
     } finally {
